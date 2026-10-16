@@ -11,6 +11,20 @@ pub enum DataKey {
     LayoutVersion,
     /// Emergency pause flag — when true, deposit/withdraw/harvest are blocked.
     Paused,
+    /// Treasury address for fee collection.
+    Treasury,
+    /// Performance fee in basis points.
+    PerfFeeBps,
+    /// Management fee in basis points (annualised).
+    MgmtFeeBps,
+    /// Cumulative fees collected but not yet withdrawn.
+    TotalFeeCollected,
+    /// Timestamp of last management-fee accrual (seconds since Unix epoch).
+    LastMgmtFeeTime,
+    /// Minimum yield required before a harvest is accepted.
+    HarvestMinimum,
+    /// Maximum total value locked cap (0 = uncapped).
+    TvlCap,
 }
 
 pub const DAY_IN_LEDGERS: u32 = 17_280;
@@ -173,4 +187,30 @@ pub fn is_paused(env: &Env) -> bool {
 
 pub fn set_paused(env: &Env, paused: bool) {
     env.storage().instance().set(&DataKey::Paused, &paused);
+}
+
+// ---------------------------------------------------------------------------
+// Harvest minimum helpers (instance storage)
+// ---------------------------------------------------------------------------
+
+/// Returns the minimum yield amount required for a harvest to proceed (0 = no minimum).
+pub fn get_harvest_minimum(env: &Env) -> i128 {
+    env.storage().instance().get(&DataKey::HarvestMinimum).unwrap_or(0)
+}
+
+pub fn set_harvest_minimum(env: &Env, val: i128) {
+    env.storage().instance().set(&DataKey::HarvestMinimum, &val);
+}
+
+// ---------------------------------------------------------------------------
+// TVL cap helpers (instance storage)
+// ---------------------------------------------------------------------------
+
+/// Returns the maximum total deposited allowed (0 = uncapped).
+pub fn get_tvl_cap(env: &Env) -> i128 {
+    env.storage().instance().get(&DataKey::TvlCap).unwrap_or(0)
+}
+
+pub fn set_tvl_cap(env: &Env, val: i128) {
+    env.storage().instance().set(&DataKey::TvlCap, &val);
 }

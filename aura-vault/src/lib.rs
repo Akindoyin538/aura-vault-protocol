@@ -259,7 +259,7 @@ impl AuraVault {
         }
 
         let new_total = total_deposited
-            .checked_add(yield_after_fee)
+            .checked_add(yield_amount)
             .ok_or(VaultError::MathOverflow)?;
 
         // Interaction: pull yield tokens into vault
@@ -383,28 +383,101 @@ impl AuraVault {
     // Fee Management Functions
     // -----------------------------------------------------------------------
     
-    /// Set performance and management fees (admin only)
+    /// Set performance and management fees (admin only).
+    /// Emits `parameter_changed` for both `perf_fee_bps` and `mgmt_fee_bps`.
     pub fn set_fees(env: Env, perf_fee_bps: u32, mgmt_fee_bps: u32) -> Result<(), VaultError> {
         let admin = storage::get_admin(&env).ok_or(VaultError::NotInitialized)?;
         admin.require_auth();
         
         fee::validate_fees(perf_fee_bps, mgmt_fee_bps)?;
-        
+
+        // Capture old values before any write.
+        let old_perf = storage::get_perf_fee_bps(&env);
+        let old_mgmt = storage::get_mgmt_fee_bps(&env);
+
         storage::set_perf_fee_bps(&env, perf_fee_bps);
         storage::set_mgmt_fee_bps(&env, mgmt_fee_bps);
         storage::bump_instance(&env);
-        
+
+        env.events().publish(
+            (Symbol::new(&env, "parameter_changed"),),
+            (Symbol::new(&env, "perf_fee_bps"), old_perf, perf_fee_bps, admin.clone()),
+        );
+        env.events().publish(
+            (Symbol::new(&env, "parameter_changed"),),
+            (Symbol::new(&env, "mgmt_fee_bps"), old_mgmt, mgmt_fee_bps, admin),
+        );
+
         Ok(())
     }
 
-    /// Set treasury address (admin only)
+    /// Set treasury address (admin only).
+    /// Emits `parameter_changed` with the old and new treasury addresses.
     pub fn set_treasury(env: Env, treasury: Address) -> Result<(), VaultError> {
         let admin = storage::get_admin(&env).ok_or(VaultError::NotInitialized)?;
         admin.require_auth();
-        
+
+        // Capture old value before write (None is represented as the zero address
+        // from the event consumer's perspective; we skip if not yet set).
+        let old_treasury = storage::get_treasury(&env);
+
         storage::set_treasury(&env, &treasury);
         storage::bump_instance(&env);
-        
+
+        env.events().publish(
+            (Symbol::new(&env, "parameter_changed"),),
+            (Symbol::new(&env, "treasury"), old_treasury, treasury, admin),
+        );
+
+        Ok(())
+    }
+
+    /// Set the minimum yield amount required for a harvest to proceed (admin only).
+    /// A harvest whose `yield_amount < harvest_minimum` will be rejected.
+    /// Emits `parameter_changed` with old and new values.
+    pub fn set_harvest_minimum(env: Env, minimum: i128) -> Result<(), VaultError> {
+        let admin = storage::get_admin(&env).ok_or(VaultError::NotInitialized)?;
+        admin.require_auth();
+
+        if minimum < 0 {
+            return Err(VaultError::ZeroAmount);
+        }
+
+        let old_minimum = storage::get_harvest_minimum(&env);
+
+        storage::set_harvest_minimum(&env, minimum);
+        storage::bump_instance(&env);
+
+        env.events().publish(
+            (Symbol::new(&env, "parameter_changed"),),
+            (Symbol::new(&env, "harvest_minimum"), old_minimum, minimum, admin),
+        );
+
+        Ok(())
+    }
+
+    /// Set the maximum total value locked cap (admin only).
+    /// A value of `0` means uncapped.  Deposits that would push `total_deposited`
+    /// above this cap will be rejected.
+    /// Emits `parameter_changed` with old and new values.
+    pub fn set_tvl_cap(env: Env, cap: i128) -> Result<(), VaultError> {
+        let admin = storage::get_admin(&env).ok_or(VaultError::NotInitialized)?;
+        admin.require_auth();
+
+        if cap < 0 {
+            return Err(VaultError::ZeroAmount);
+        }
+
+        let old_cap = storage::get_tvl_cap(&env);
+
+        storage::set_tvl_cap(&env, cap);
+        storage::bump_instance(&env);
+
+        env.events().publish(
+            (Symbol::new(&env, "parameter_changed"),),
+            (Symbol::new(&env, "tvl_cap"), old_cap, cap, admin),
+        );
+
         Ok(())
     }
 

@@ -76,3 +76,65 @@ groups:
         annotations:
           summary: "Vault balance is low"
           description: "Vault XLM balance is below 100 (current: {{ $value }})."
+
+  - name: aura-vault-governance
+    rules:
+      # -----------------------------------------------------------------------
+      # UnexpectedParameterChange
+      #
+      # Fires whenever a `parameter_changed` event is indexed outside of a
+      # known governance window.  Any non-zero rate of parameter changes that
+      # occurs while no planned maintenance window is open should be treated as
+      # a potential governance attack or misconfiguration.
+      #
+      # Counter source: the backend /metrics endpoint exposed by events.ts:
+      #   aura_vault_parameter_changes_total
+      #
+      # How to suppress for planned changes:
+      #   Set the `MAINTENANCE_WINDOW` label to "true" on the job in
+      #   prometheus.yml during a planned governance window, or use
+      #   Alertmanager inhibition rules.
+      # -----------------------------------------------------------------------
+      - alert: UnexpectedParameterChange
+        expr: increase(aura_vault_parameter_changes_total[5m]) > 0
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Unexpected AuraVault parameter change detected"
+          description: >
+            The AuraVault contract parameter was changed outside of a planned
+            governance window.  {{ $value }} change(s) were detected in the
+            last 5 minutes.  Verify that this was an authorised admin action
+            and not a governance attack.  Inspect recent transactions on the
+            contract at https://stellar.expert/explorer/testnet/contract/{{ $labels.contract_id }}.
+
+      # Alert if any single parameter changes more than once within 10 minutes.
+      # A legitimate fee update should happen at most once per governance cycle.
+      - alert: RapidParameterChanges
+        expr: increase(aura_vault_parameter_changes_total[10m]) > 1
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Multiple AuraVault parameter changes in a short window"
+          description: >
+            {{ $value }} parameter_changed events were indexed within 10 minutes.
+            Legitimate governance operations typically change a parameter at most
+            once per cycle.  This may indicate a compromised admin key or a
+            contract exploit.  Investigate immediately.
+
+      # Warn if a specific parameter (e.g. perf_fee_bps) changes at all.
+      # This catches fee manipulation even when the overall rate looks normal.
+      - alert: FeeParameterChanged
+        expr: increase(aura_vault_parameter_changes_by_name_total{param=~"perf_fee_bps|mgmt_fee_bps"}[1h]) > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "AuraVault fee parameter changed: {{ $labels.param }}"
+          description: >
+            The fee parameter '{{ $labels.param }}' was modified.
+            Verify the new value is within policy limits and that the change
+            was performed by the authorised admin through the correct governance
+            process.
