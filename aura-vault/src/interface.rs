@@ -20,4 +20,9 @@ pub trait AuraVaultTrait {
     fn upgrade(env: Env, new_wasm_hash: BytesN<32>) -> Result<(), VaultError>;
     /// Returns the current monotonic version number (starts at 1 after initialize).
     fn version(env: Env) -> u32;
+    /// Set the soft and hard TVL caps.  Pass `None` to remove a cap.
+    /// Only the admin may call this.
+    fn set_tvl_caps(env: Env, soft: Option<i128>, hard: Option<i128>) -> Result<(), VaultError>;
+    /// Return the current `(soft_cap, hard_cap)` pair.
+    fn get_tvl_caps(env: Env) -> (Option<i128>, Option<i128>);
 }

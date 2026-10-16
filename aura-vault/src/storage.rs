@@ -11,6 +11,15 @@ pub enum DataKey {
     LayoutVersion,
     /// Emergency pause flag — when true, deposit/withdraw/harvest are blocked.
     Paused,
+    /// Fee-related keys.
+    Treasury,
+    PerfFeeBps,
+    MgmtFeeBps,
+    TotalFeeCollected,
+    LastMgmtFeeTime,
+    /// TVL cap keys — both are Option<i128> (None = no cap).
+    SoftTvlCap,
+    HardTvlCap,
 }
 
 pub const DAY_IN_LEDGERS: u32 = 17_280;
@@ -173,4 +182,34 @@ pub fn is_paused(env: &Env) -> bool {
 
 pub fn set_paused(env: &Env, paused: bool) {
     env.storage().instance().set(&DataKey::Paused, &paused);
+}
+
+// ---------------------------------------------------------------------------
+// TVL cap helpers (instance storage)
+// ---------------------------------------------------------------------------
+
+/// Soft TVL cap — `None` means no cap.  When total assets exceeds this value
+/// a `tvl_soft_cap_warning` event is emitted but the deposit proceeds.
+pub fn get_soft_tvl_cap(env: &Env) -> Option<i128> {
+    env.storage().instance().get(&DataKey::SoftTvlCap)
+}
+
+pub fn set_soft_tvl_cap(env: &Env, cap: Option<i128>) {
+    match cap {
+        Some(v) => env.storage().instance().set(&DataKey::SoftTvlCap, &v),
+        None    => env.storage().instance().remove(&DataKey::SoftTvlCap),
+    }
+}
+
+/// Hard TVL cap — `None` means no cap.  When `total_assets + deposit > cap`
+/// the deposit is rejected with `TvlCapExceeded`.
+pub fn get_hard_tvl_cap(env: &Env) -> Option<i128> {
+    env.storage().instance().get(&DataKey::HardTvlCap)
+}
+
+pub fn set_hard_tvl_cap(env: &Env, cap: Option<i128>) {
+    match cap {
+        Some(v) => env.storage().instance().set(&DataKey::HardTvlCap, &v),
+        None    => env.storage().instance().remove(&DataKey::HardTvlCap),
+    }
 }

@@ -22,4 +22,8 @@ pub enum VaultError {
     VaultPaused            = 11,
     /// Token balance is inconsistent with tracked state (flash loan guard).
     BalanceMismatch        = 12,
+    /// Caller is not the admin — harvest rejected.
+    HarvestUnauthorized    = 13,
+    /// Deposit would push total assets above the hard TVL cap.
+    TvlCapExceeded         = 18,
 }
