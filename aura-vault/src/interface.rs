@@ -20,4 +20,8 @@ pub trait AuraVaultTrait {
     fn upgrade(env: Env, new_wasm_hash: BytesN<32>) -> Result<(), VaultError>;
     /// Returns the current monotonic version number (starts at 1 after initialize).
     fn version(env: Env) -> u32;
+
+    /// Time-weighted average price of a vault share over `window_seconds`.
+    /// Returns the spot price if fewer than 2 observations exist.
+    fn get_twap(env: Env, window_seconds: u64) -> i128;
 }

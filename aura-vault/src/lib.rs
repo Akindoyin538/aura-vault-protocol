@@ -114,7 +114,7 @@ impl AuraVault {
 
         env.events().publish(
             (Symbol::new(&env, "deposit"),),
-            (caller, amount, new_shares),
+            (caller.clone(), amount, new_shares),
         );
 
         bump_persistent(&env, &caller);
@@ -197,7 +197,7 @@ impl AuraVault {
 
         env.events().publish(
             (Symbol::new(&env, "withdraw"),),
-            (caller, shares, redeem_amount),
+            (caller.clone(), shares, redeem_amount),
         );
 
         bump_persistent(&env, &caller);
@@ -258,6 +258,15 @@ impl AuraVault {
             return Err(VaultError::BalanceMismatch);
         }
 
+        // Calculate performance fee on yield
+        let perf_fee_bps = storage::get_perf_fee_bps(&env);
+        let perf_fee = fee::calc_perf_fee(yield_amount, perf_fee_bps)?;
+
+        // Yield after performance fee goes into the vault; fee is tracked separately
+        let yield_after_fee = yield_amount
+            .checked_sub(perf_fee)
+            .ok_or(VaultError::MathOverflow)?;
+
         let new_total = total_deposited
             .checked_add(yield_after_fee)
             .ok_or(VaultError::MathOverflow)?;
@@ -267,6 +276,18 @@ impl AuraVault {
 
         // Effect: increase total deposited with yield after fees, record fees
         set_total_deposited(&env, new_total);
+
+        // Record accrued performance fee
+        let total_fee = storage::get_total_fee_collected(&env)
+            .checked_add(perf_fee)
+            .ok_or(VaultError::MathOverflow)?;
+        storage::set_total_fee_collected(&env, total_fee);
+
+        // Record TWAP snapshot — share price after this harvest
+        let ts = env.ledger().timestamp();
+        let price = share_price(&env, new_total, total_shares);
+        storage::twap_push(&env, &storage::PriceSnapshot { ts, price });
+        storage::bump_twap_slots(&env);
 
         env.events().publish(
             (Symbol::new(&env, "harvest"),),
@@ -380,6 +401,90 @@ impl AuraVault {
     }
 
     // -----------------------------------------------------------------------
+    // TWAP oracle — time-weighted average price of a vault share
+    // -----------------------------------------------------------------------
+
+    /// Returns the time-weighted average price of one vault share over the
+    /// last `window_seconds` seconds.
+    ///
+    /// The price is expressed in fixed-point with `PRICE_SCALE` (1e9) decimals:
+    /// `price = (total_assets / total_shares) * PRICE_SCALE`.
+    ///
+    /// If fewer than 2 observations exist the spot price is returned instead.
+    /// If the vault has no shares (total_shares == 0) the price is defined as
+    /// `PRICE_SCALE` (1:1) to avoid division by zero.
+    pub fn get_twap(env: Env, window_seconds: u64) -> i128 {
+        let len = storage::twap_len(&env);
+
+        // Fewer than 2 observations → return spot price
+        if len < 2 {
+            return share_price(&env, get_total_deposited(&env), get_total_shares(&env));
+        }
+
+        let now = env.ledger().timestamp();
+        let cutoff = now.saturating_sub(window_seconds);
+
+        // Walk the buffer from newest to oldest, collecting observations that
+        // fall within the window.  The newest snapshot is at logical index
+        // `len - 1`.
+        //
+        // TWAP = Σ(price_i × duration_i) / Σ(duration_i)
+        // where duration_i is the time between observation i and i+1.
+
+        let mut weighted_sum: i128 = 0;
+        let mut total_weight: u64 = 0;
+
+        // Start from the newest observation
+        let mut prev_ts: u64 = now;
+
+        for i in (0..len).rev() {
+            let snap = storage::twap_get(&env, i);
+
+            // If this observation is older than the cutoff, it's the boundary
+            // point.  The duration for the segment above it is clipped to
+            // (prev_ts - cutoff) rather than (prev_ts - snap.ts).
+            if snap.ts <= cutoff {
+                let segment = prev_ts.saturating_sub(cutoff);
+                if segment > 0 {
+                    weighted_sum = weighted_sum
+                        .checked_add(
+                            snap.price
+                                .checked_mul(segment as i128)
+                                .unwrap_or(0),
+                        )
+                        .unwrap_or(0);
+                    total_weight = total_weight.saturating_add(segment);
+                }
+                break;
+            }
+
+            // Full segment between this observation and the previous one
+            let segment = prev_ts.saturating_sub(snap.ts);
+            if segment > 0 {
+                weighted_sum = weighted_sum
+                    .checked_add(
+                        snap.price
+                            .checked_mul(segment as i128)
+                            .unwrap_or(0),
+                    )
+                    .unwrap_or(0);
+                total_weight = total_weight.saturating_add(segment);
+            }
+
+            prev_ts = snap.ts;
+        }
+
+        if total_weight == 0 {
+            // All observations are newer than the window → return spot price
+            return share_price(&env, get_total_deposited(&env), get_total_shares(&env));
+        }
+
+        weighted_sum
+            .checked_div(total_weight as i128)
+            .unwrap_or(0)
+    }
+
+    // -----------------------------------------------------------------------
     // Fee Management Functions
     // -----------------------------------------------------------------------
     
@@ -440,4 +545,21 @@ impl AuraVault {
         
         Ok(fees)
     }
+}
+
+// ---------------------------------------------------------------------------
+// Internal helper: compute the current share price in fixed-point
+// ---------------------------------------------------------------------------
+
+/// Compute the share price as `(total_assets / total_shares) * PRICE_SCALE`.
+/// If `total_shares` is zero, returns `PRICE_SCALE` (1:1) to avoid div-by-zero.
+fn share_price(_env: &Env, total_assets: i128, total_shares: i128) -> i128 {
+    if total_shares == 0 {
+        return storage::PRICE_SCALE;
+    }
+    total_assets
+        .checked_mul(storage::PRICE_SCALE)
+        .unwrap_or(0)
+        .checked_div(total_shares)
+        .unwrap_or(0)
 }

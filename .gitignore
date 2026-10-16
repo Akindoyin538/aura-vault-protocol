@@ -2,3 +2,4 @@ target/
 Cargo.lock
 .DS_Store
 *.wasm
+aura-vault/test_snapshots/
