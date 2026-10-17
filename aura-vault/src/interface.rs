@@ -11,6 +11,10 @@ pub trait AuraVaultTrait {
     fn pause(env: Env, admin: Address) -> Result<(), VaultError>;
     fn unpause(env: Env, admin: Address) -> Result<(), VaultError>;
     fn is_paused(env: Env) -> bool;
+    fn add_to_allowlist(env: Env, admin: Address, address: Address) -> Result<(), VaultError>;
+    fn remove_from_allowlist(env: Env, admin: Address, address: Address) -> Result<(), VaultError>;
+    fn is_allowlisted(env: Env, address: Address) -> bool;
+    fn allowlist_enabled(env: Env) -> bool;
     fn set_fees(env: Env, admin: Address, perf_fee_bps: u32, mgmt_fee_bps: u32) -> Result<(), VaultError>;
     fn set_treasury(env: Env, admin: Address, treasury: Address) -> Result<(), VaultError>;
     fn withdraw_fees(env: Env, admin: Address) -> Result<i128, VaultError>;

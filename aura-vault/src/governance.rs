@@ -1,5 +1,5 @@
-use soroban_sdk::{contracttype, Address, Env, Vec, Symbol};
 use crate::errors::VaultError;
+use soroban_sdk::{contracttype, Address, Env, Symbol, Vec};
 
 pub const REQUIRED_SIGNATURES: u32 = 3;
 pub const TIMELOCK_DURATION: u64 = 24 * 60 * 60; // 24 hours in seconds
@@ -9,7 +9,7 @@ pub const TIMELOCK_DURATION: u64 = 24 * 60 * 60; // 24 hours in seconds
 pub enum ProposalType {
     UpdateAdmin,
     UpdateUnderlyingToken,
-    UpdateParameter { name: Symbol, value: i128 },
+    UpdateParameter(Symbol, i128),
 }
 
 #[contracttype]
@@ -40,7 +40,7 @@ pub enum GovDataKey {
     Signers,
     ProposalCount,
     Proposal(u64),
-    ProposalVote { proposal_id: u64, signer: Address },
+    ProposalVote(u64, Address),
     Admin,
 }
 
@@ -81,21 +81,16 @@ pub fn set_proposal(env: &Env, id: u64, proposal: &Proposal) {
 }
 
 pub fn has_voted(env: &Env, proposal_id: u64, signer: &Address) -> bool {
-    env.storage()
+    let vote: Option<bool> = env
+        .storage()
         .instance()
-        .get(&GovDataKey::ProposalVote {
-            proposal_id,
-            signer: signer.clone(),
-        })
-        .is_some()
+        .get(&GovDataKey::ProposalVote(proposal_id, signer.clone()));
+    vote.is_some()
 }
 
 pub fn record_vote(env: &Env, proposal_id: u64, signer: &Address) {
     env.storage().instance().set(
-        &GovDataKey::ProposalVote {
-            proposal_id,
-            signer: signer.clone(),
-        },
+        &GovDataKey::ProposalVote(proposal_id, signer.clone()),
         &true,
     );
 }
@@ -119,7 +114,7 @@ pub fn create_proposal(
     proposer.require_auth();
     
     let signers = get_signers(env);
-    if !signers.iter().any(|s| s == &proposer) {
+    if !signers.iter().any(|s| s == proposer) {
         return Err(VaultError::InvalidAddress);
     }
 
@@ -154,7 +149,7 @@ pub fn vote_on_proposal(
     voter.require_auth();
 
     let signers = get_signers(env);
-    if !signers.iter().any(|s| s == &voter) {
+    if !signers.iter().any(|s| s == voter) {
         return Err(VaultError::InvalidAddress);
     }
 
@@ -192,7 +187,7 @@ pub fn execute_proposal(
     env: &Env,
     executor: Address,
     proposal_id: u64,
-) -> Result<(), VaultError> {
+) -> Result<ProposalType, VaultError> {
     executor.require_auth();
 
     let mut proposal = get_proposal(env, proposal_id)
@@ -211,7 +206,7 @@ pub fn execute_proposal(
     proposal.status = ProposalStatus::Executed;
     set_proposal(env, proposal_id, &proposal);
 
-    Ok(())
+    Ok(proposal.proposal_type)
 }
 
 pub fn get_proposal_status(env: &Env, proposal_id: u64) -> Option<ProposalStatus> {

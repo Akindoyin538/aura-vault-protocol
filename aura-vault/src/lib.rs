@@ -19,7 +19,9 @@ use storage::{
     bump_instance, bump_persistent, get_admin, get_balance, get_layout_version, get_token,
     get_total_deposited, get_total_shares, get_version, is_paused as storage_is_paused, set_admin,
     set_balance, set_layout_version, set_paused, set_token, set_total_deposited, set_total_shares,
-    set_version, CURRENT_LAYOUT_VERSION,
+    set_version, CURRENT_LAYOUT_VERSION, is_allowlisted as storage_is_allowlisted,
+    is_allowlist_enabled as storage_is_allowlist_enabled, set_allowlisted,
+    set_allowlist_enabled,
 };
 use governance::{
     initialize_governance, create_proposal, vote_on_proposal, execute_proposal,
@@ -47,6 +49,7 @@ impl AuraVault {
         set_token(&env, &underlying_token);
         set_total_shares(&env, 0);
         set_total_deposited(&env, 0);
+        set_allowlist_enabled(&env, false);
         set_version(&env, 1);
         set_layout_version(&env, CURRENT_LAYOUT_VERSION);
         initialize_governance(&env, signers)?;
@@ -73,6 +76,9 @@ impl AuraVault {
         }
         if storage_is_paused(&env) {
             return Err(VaultError::VaultPaused);
+        }
+        if storage_is_allowlist_enabled(&env) && !storage_is_allowlisted(&env, &caller) {
+            return Err(VaultError::NotApproved);
         }
 
         let token_addr = get_token(&env).ok_or(VaultError::NotInitialized)?;
@@ -409,6 +415,52 @@ impl AuraVault {
         storage_is_paused(&env)
     }
 
+    pub fn add_to_allowlist(env: Env, admin: Address, address: Address) -> Result<(), VaultError> {
+        let stored_admin = get_admin(&env).ok_or(VaultError::NotInitialized)?;
+        if stored_admin != admin {
+            return Err(VaultError::UpgradeUnauthorized);
+        }
+        admin.require_auth();
+        if !storage_is_allowlisted(&env, &address) {
+            set_allowlisted(&env, &address, true);
+            env.events().publish(
+                (Symbol::new(&env, "allowlist_address_added"), address),
+                (),
+            );
+        }
+        bump_instance(&env);
+        Ok(())
+    }
+
+    pub fn remove_from_allowlist(
+        env: Env,
+        admin: Address,
+        address: Address,
+    ) -> Result<(), VaultError> {
+        let stored_admin = get_admin(&env).ok_or(VaultError::NotInitialized)?;
+        if stored_admin != admin {
+            return Err(VaultError::UpgradeUnauthorized);
+        }
+        admin.require_auth();
+        if storage_is_allowlisted(&env, &address) {
+            set_allowlisted(&env, &address, false);
+            env.events().publish(
+                (Symbol::new(&env, "allowlist_address_removed"), address),
+                (),
+            );
+        }
+        bump_instance(&env);
+        Ok(())
+    }
+
+    pub fn is_allowlisted(env: Env, address: Address) -> bool {
+        storage_is_allowlisted(&env, &address)
+    }
+
+    pub fn allowlist_enabled(env: Env) -> bool {
+        storage_is_allowlist_enabled(&env)
+    }
+
     // -----------------------------------------------------------------------
     // Fee administration — admin-only
     // -----------------------------------------------------------------------
@@ -533,7 +585,7 @@ impl AuraVault {
         name: Symbol,
         value: i128,
     ) -> Result<u64, VaultError> {
-        create_proposal(&env, proposer, ProposalType::UpdateParameter { name, value })
+        create_proposal(&env, proposer, ProposalType::UpdateParameter(name, value))
     }
 
     pub fn vote(
@@ -550,7 +602,17 @@ impl AuraVault {
         executor: Address,
         proposal_id: u64,
     ) -> Result<(), VaultError> {
-        execute_proposal(&env, executor, proposal_id)?;
+        let proposal_type = execute_proposal(&env, executor, proposal_id)?;
+        if let ProposalType::UpdateParameter(name, value) = proposal_type {
+            if name == Symbol::new(&env, "set_allowlist_enabled") {
+                let enabled = match value {
+                    0 => false,
+                    1 => true,
+                    _ => return Err(VaultError::InvalidAddress),
+                };
+                set_allowlist_enabled(&env, enabled);
+            }
+        }
         bump_instance(&env);
         Ok(())
     }

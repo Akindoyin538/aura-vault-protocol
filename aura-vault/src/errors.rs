@@ -18,4 +18,5 @@ pub enum VaultError {
     StorageLayoutMismatch  = 10,
     VaultPaused            = 11,
     BalanceMismatch        = 12,
+    NotApproved            = 14,
 }

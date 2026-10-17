@@ -2,8 +2,10 @@
 
 extern crate std;
 
-use soroban_sdk::{testutils::Address as _, Address, Env, Vec};
-use soroban_sdk::token::StellarAssetClient;
+use soroban_sdk::{
+    testutils::{Address as _, Events as _, Ledger as _}, Address, Env, Symbol, TryFromVal, Vec,
+};
+use soroban_sdk::token::{StellarAssetClient, TokenClient};
 
 use crate::{AuraVault, AuraVaultClient, VaultError};
 
@@ -467,7 +469,7 @@ fn test_withdraw_fees_transfers_to_treasury_and_resets_total_fees() {
     let withdrawn = vault.withdraw_fees(&admin);
     assert_eq!(withdrawn, 100_000);
     assert_eq!(vault.total_fees_collected(), 0);
-    assert_eq!(StellarAssetClient::new(&env, &token).balance(&treasury), 100_000);
+    assert_eq!(TokenClient::new(&env, &token).balance(&treasury), 100_000);
 }
 
 // ---------------------------------------------------------------------------
@@ -663,4 +665,190 @@ fn test_cannot_vote_twice() {
     vault.vote(&signers[0], &proposal_id, &true);
     let result = vault.try_vote(&signers[0], &proposal_id, &false);
     assert_eq!(result, Err(Ok(VaultError::InvalidAddress)));
+}
+
+// ---------------------------------------------------------------------------
+// Deposit allowlist tests (Issue #916)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_allowlist_defaults_to_disabled_and_existing_deposits_work() {
+    let (env, vault, admin, token) = setup();
+    let user = Address::generate(&env);
+    mint(&env, &token, &admin, &user, 1_000);
+
+    assert!(!vault.allowlist_enabled());
+    assert!(!vault.is_allowlisted(&user));
+    assert_eq!(vault.deposit(&user, &1_000), 1_000);
+}
+
+#[test]
+fn test_allowlist_admin_can_add_and_remove_addresses() {
+    let (env, vault, admin, _token) = setup();
+    let user = Address::generate(&env);
+
+    vault.add_to_allowlist(&admin, &user);
+    assert_allowlist_event(&env, 0, "allowlist_address_added", &user);
+    assert!(vault.is_allowlisted(&user));
+    vault.remove_from_allowlist(&admin, &user);
+    assert_allowlist_event(&env, 0, "allowlist_address_removed", &user);
+    assert!(!vault.is_allowlisted(&user));
+}
+
+#[test]
+fn test_allowlist_management_rejects_non_admin() {
+    let (env, vault, _admin, _token) = setup();
+    let stranger = Address::generate(&env);
+    let user = Address::generate(&env);
+
+    assert_eq!(
+        vault.try_add_to_allowlist(&stranger, &user),
+        Err(Ok(VaultError::UpgradeUnauthorized))
+    );
+    assert_eq!(
+        vault.try_remove_from_allowlist(&stranger, &user),
+        Err(Ok(VaultError::UpgradeUnauthorized))
+    );
+}
+
+#[test]
+fn test_allowlist_management_requires_admin_authentication() {
+    let (env, vault, admin, _token) = setup();
+    let user = Address::generate(&env);
+
+    env.mock_auths(&[]);
+    assert!(vault.try_add_to_allowlist(&admin, &user).is_err());
+    assert!(vault.try_remove_from_allowlist(&admin, &user).is_err());
+}
+
+#[test]
+fn test_allowlist_enabled_rejects_unapproved_and_accepts_approved_deposits() {
+    let (env, vault, signers, admin, token) = setup_multisig();
+    let approved = Address::generate(&env);
+    let rejected = Address::generate(&env);
+    mint(&env, &token, &admin, &approved, 1_000);
+    mint(&env, &token, &admin, &rejected, 1_000);
+
+    vault.add_to_allowlist(&admin, &approved);
+    let proposal_id = vault.propose_parameter_update(
+        &signers[0],
+        &soroban_sdk::Symbol::new(&env, "set_allowlist_enabled"),
+        &1,
+    );
+    approve_and_execute(&env, &vault, &signers, &proposal_id);
+
+    assert_eq!(
+        vault.try_deposit(&rejected, &1_000),
+        Err(Ok(VaultError::NotApproved))
+    );
+    assert_eq!(VaultError::NotApproved as u32, 14);
+    assert_eq!(vault.total_assets(), 0);
+    assert_eq!(vault.deposit(&approved, &1_000), 1_000);
+
+    vault.remove_from_allowlist(&admin, &approved);
+    assert!(!vault.is_allowlisted(&approved));
+    assert_eq!(
+        vault.try_deposit(&approved, &1),
+        Err(Ok(VaultError::NotApproved))
+    );
+}
+
+#[test]
+fn test_allowlist_mode_can_only_change_after_governance_timelock() {
+    let (env, vault, signers, _admin, _token) = setup_multisig();
+    let proposal_id = vault.propose_parameter_update(
+        &signers[0],
+        &soroban_sdk::Symbol::new(&env, "set_allowlist_enabled"),
+        &1,
+    );
+    for signer in signers.iter().take(3) {
+        vault.vote(signer, &proposal_id, &true);
+    }
+
+    assert_eq!(
+        vault.proposal_status(&proposal_id),
+        Some(soroban_sdk::String::from_str(&env, "Approved"))
+    );
+    assert_eq!(
+        vault.try_execute(&signers[0], &proposal_id),
+        Err(Ok(VaultError::InvalidAddress))
+    );
+    assert!(!vault.allowlist_enabled());
+
+    env.ledger()
+        .with_mut(|ledger| ledger.timestamp = 24 * 60 * 60);
+    vault.execute(&signers[0], &proposal_id);
+    assert!(vault.allowlist_enabled());
+}
+
+#[test]
+fn test_allowlist_mode_can_be_disabled_through_governance() {
+    let (env, vault, signers, _admin, _token) = setup_multisig();
+    let enable_id = vault.propose_parameter_update(
+        &signers[0],
+        &soroban_sdk::Symbol::new(&env, "set_allowlist_enabled"),
+        &1,
+    );
+    approve_and_execute(&env, &vault, &signers, &enable_id);
+
+    let disable_id = vault.propose_parameter_update(
+        &signers[0],
+        &soroban_sdk::Symbol::new(&env, "set_allowlist_enabled"),
+        &0,
+    );
+    approve_and_execute(&env, &vault, &signers, &disable_id);
+    assert!(!vault.allowlist_enabled());
+}
+
+#[test]
+fn test_allowlist_governance_rejects_non_boolean_parameter_values() {
+    let (env, vault, signers, _admin, _token) = setup_multisig();
+    let proposal_id = vault.propose_parameter_update(
+        &signers[0],
+        &soroban_sdk::Symbol::new(&env, "set_allowlist_enabled"),
+        &2,
+    );
+    for signer in signers.iter().take(3) {
+        vault.vote(signer, &proposal_id, &true);
+    }
+    env.ledger()
+        .with_mut(|ledger| ledger.timestamp = 24 * 60 * 60);
+
+    assert_eq!(
+        vault.try_execute(&signers[0], &proposal_id),
+        Err(Ok(VaultError::InvalidAddress))
+    );
+    assert!(!vault.allowlist_enabled());
+    assert_eq!(
+        vault.proposal_status(&proposal_id),
+        Some(soroban_sdk::String::from_str(&env, "Approved"))
+    );
+}
+
+fn approve_and_execute(
+    env: &Env,
+    vault: &AuraVaultClient<'static>,
+    signers: &[Address],
+    proposal_id: &u64,
+) {
+    for signer in signers.iter().take(3) {
+        vault.vote(signer, proposal_id, &true);
+    }
+    let execution_time = env.ledger().timestamp() + 24 * 60 * 60;
+    env.ledger()
+        .with_mut(|ledger| ledger.timestamp = execution_time);
+    vault.execute(&signers[0], proposal_id);
+}
+
+fn assert_allowlist_event(env: &Env, index: u32, event_name: &str, address: &Address) {
+    let events = env.events().all();
+    let (_, topics, _) = events.get(index).unwrap();
+    assert_eq!(
+        Symbol::try_from_val(env, &topics.get(0).unwrap()).unwrap(),
+        Symbol::new(env, event_name)
+    );
+    assert_eq!(
+        Address::try_from_val(env, &topics.get(1).unwrap()).unwrap(),
+        address.clone()
+    );
 }

@@ -18,6 +18,8 @@ pub enum DataKey {
     LastMgmtFeeTime,
     /// Whitelisted alternative yield tokens (Issue #48)
     YieldToken(Address),
+    AllowlistedAddress(Address),
+    AllowlistEnabled,
 }
 
 pub const DAY_IN_LEDGERS: u32 = 17_280;
@@ -138,6 +140,40 @@ pub fn set_yield_token(env: &Env, token: &Address, enabled: bool) {
     env.storage()
         .instance()
         .set(&DataKey::YieldToken(token.clone()), &enabled);
+}
+
+pub fn is_allowlist_enabled(env: &Env) -> bool {
+    env.storage()
+        .instance()
+        .get(&DataKey::AllowlistEnabled)
+        .unwrap_or(false)
+}
+
+pub fn set_allowlist_enabled(env: &Env, enabled: bool) {
+    env.storage()
+        .instance()
+        .set(&DataKey::AllowlistEnabled, &enabled);
+}
+
+pub fn is_allowlisted(env: &Env, address: &Address) -> bool {
+    env.storage()
+        .persistent()
+        .get(&DataKey::AllowlistedAddress(address.clone()))
+        .unwrap_or(false)
+}
+
+pub fn set_allowlisted(env: &Env, address: &Address, allowed: bool) {
+    let key = DataKey::AllowlistedAddress(address.clone());
+    if allowed {
+        env.storage().persistent().set(&key, &true);
+        env.storage().persistent().extend_ttl(
+            &key,
+            PERSISTENT_LIFETIME_THRESHOLD,
+            PERSISTENT_BUMP_AMOUNT,
+        );
+    } else {
+        env.storage().persistent().remove(&key);
+    }
 }
 
 // ---------------------------------------------------------------------------
