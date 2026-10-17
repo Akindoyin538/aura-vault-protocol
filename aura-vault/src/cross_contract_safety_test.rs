@@ -226,7 +226,7 @@ mod cross_contract_safety_tests {
         let user = Address::generate(&env);
         mint(&env, &token, &admin, &user, 1_000_000);
         // Should succeed without TransferFailed
-        let shares = vault.deposit(&user, &1_000_000);
+        let shares = vault.deposit(&user, &1_000_000, &None);
         assert_eq!(shares, 1_000_000);
     }
 
@@ -239,7 +239,7 @@ mod cross_contract_safety_tests {
         let (env, vault, admin, token) = setup();
         let user = Address::generate(&env);
         mint(&env, &token, &admin, &user, 2_000_000);
-        vault.deposit(&user, &2_000_000);
+        vault.deposit(&user, &2_000_000, &None);
         let redeemed = vault.withdraw(&user, &vault.balance_of(&user));
         assert_eq!(redeemed, 2_000_000);
     }
@@ -255,7 +255,7 @@ mod cross_contract_safety_tests {
         let keeper = Address::generate(&env);
         mint(&env, &token, &admin, &depositor, 1_000_000);
         mint(&env, &token, &admin, &keeper, 100_000);
-        vault.deposit(&depositor, &1_000_000);
+        vault.deposit(&depositor, &1_000_000, &None);
         vault.harvest(&keeper, &100_000);
         assert_eq!(vault.total_assets(), 1_100_000);
     }
@@ -277,7 +277,7 @@ mod cross_contract_safety_tests {
 
         let depositor = Address::generate(&env);
         mint(&env, &_token, &admin, &depositor, 1_000_000);
-        vault.deposit(&depositor, &1_000_000);
+        vault.deposit(&depositor, &1_000_000, &None);
 
         // underlying_amount = 0 should be caught by ZeroAmount check (before oracle check)
         vault.harvest_token(&keeper, &alt_token_addr, &100_000, &0);
@@ -297,7 +297,7 @@ mod cross_contract_safety_tests {
         let keeper = Address::generate(&env);
         mint(&env, &token, &admin, &depositor, 1_000_000);
         StellarAssetClient::new(&env, &alt_token_addr).mint(&keeper, &50_000);
-        vault.deposit(&depositor, &1_000_000);
+        vault.deposit(&depositor, &1_000_000, &None);
 
         // underlying_amount is a reasonable positive value — oracle guard passes
         vault.harvest_token(&keeper, &alt_token_addr, &50_000, &50_000);
@@ -337,7 +337,7 @@ mod cross_contract_safety_tests {
         let keeper = Address::generate(&env);
         mint(&env, &token, &admin, &depositor, 1_000_000);
         StellarAssetClient::new(&env, &alt_token_addr).mint(&keeper, &50_000);
-        vault.deposit(&depositor, &1_000_000);
+        vault.deposit(&depositor, &1_000_000, &None);
 
         // underlying_amount = 0 — ZeroAmount check fires first
         vault.distribute_yield_token(&keeper, &alt_token_addr, &50_000, &0);
@@ -359,7 +359,7 @@ mod cross_contract_safety_tests {
         let keeper = Address::generate(&env);
         mint(&env, &token, &admin, &depositor, 1_000_000);
         mint(&env, &token, &admin, &keeper, 100_000);
-        vault.deposit(&depositor, &1_000_000);
+        vault.deposit(&depositor, &1_000_000, &None);
         vault.harvest(&keeper, &100_000);
 
         let fees = vault.total_fees_collected();
@@ -379,7 +379,7 @@ mod cross_contract_safety_tests {
         let (env, vault, admin, token) = setup();
         let user = Address::generate(&env);
         mint(&env, &token, &admin, &user, 1_000_000);
-        vault.deposit(&user, &1_000_000);
+        vault.deposit(&user, &1_000_000, &None);
 
         let shares = vault.balance_of(&user);
         vault.withdraw(&user, &shares);
@@ -400,7 +400,7 @@ mod cross_contract_safety_tests {
         let keeper = Address::generate(&env);
         mint(&env, &token, &admin, &depositor, 1_000_000);
         mint(&env, &token, &admin, &keeper, 100_000);
-        vault.deposit(&depositor, &1_000_000);
+        vault.deposit(&depositor, &1_000_000, &None);
         vault.distribute_yield(&keeper, &100_000);
 
         let pending = vault.pending_yield(&depositor);

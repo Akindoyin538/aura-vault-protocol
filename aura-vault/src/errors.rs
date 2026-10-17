@@ -267,6 +267,8 @@ pub enum VaultError {
     BelowMinDeposit        = 29,
     /// A reentrant call was detected and blocked by the reentrancy guard. Issue #345.
     Reentrancy             = 30,
+    /// Referrer address is the same as the depositor address.
+    SelfReferral           = 31,
 }
 
 impl VaultError {
@@ -303,6 +305,7 @@ impl VaultError {
             VaultError::NotWhitelisted => "Caller is not whitelisted for deposit",
             VaultError::BelowMinDeposit => "Deposit amount is below minimum deposit threshold",
             VaultError::Reentrancy => "Reentrancy detected: contract call is not reentrant",
+            VaultError::SelfReferral => "Referrer address must be different from the depositor address",
         }
     }
 }
