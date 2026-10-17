@@ -267,6 +267,36 @@ pub enum VaultError {
     BelowMinDeposit        = 29,
     /// A reentrant call was detected and blocked by the reentrancy guard. Issue #345.
     Reentrancy             = 30,
+    /// `emergency_withdraw` was called while the vault is not paused.
+    ///
+    /// **Trigger:** `emergency_withdraw(caller, shares)` called when the vault
+    /// is currently operating normally (not paused). Emergency withdrawals are
+    /// only permitted during a pause to give users a guaranteed exit path.
+    ///
+    /// **Resolution:** Use the normal `withdraw` function when the vault is
+    /// unpaused. If you believe the vault should be paused, contact the admin.
+    VaultNotPaused         = 31,
+
+    // -----------------------------------------------------------------------
+    // 32–38: Multi-sig / governance operation errors
+    // -----------------------------------------------------------------------
+
+    /// Caller is not in the governance signer whitelist.
+    NotASigner             = 32,
+    /// The governance operation was not found (invalid ID).
+    OperationNotFound      = 33,
+    /// The governance operation has already been executed.
+    OperationAlreadyExecuted = 34,
+    /// The governance operation has expired before reaching threshold.
+    OperationExpired       = 35,
+    /// The signer has already signed this governance operation.
+    OperationAlreadySigned = 36,
+    /// The governance operation has not reached the required signature threshold.
+    ThresholdNotMet        = 37,
+    /// The requested threshold is invalid (zero, or exceeds signer count).
+    InvalidThreshold       = 38,
+    /// The circuit breaker tripped due to excessive share-price movement.
+    CircuitBreakerTripped  = 39,
 }
 
 impl VaultError {
@@ -303,6 +333,15 @@ impl VaultError {
             VaultError::NotWhitelisted => "Caller is not whitelisted for deposit",
             VaultError::BelowMinDeposit => "Deposit amount is below minimum deposit threshold",
             VaultError::Reentrancy => "Reentrancy detected: contract call is not reentrant",
+            VaultError::VaultNotPaused => "Vault is not paused; use normal withdraw",
+            VaultError::NotASigner => "Caller is not a governance signer",
+            VaultError::OperationNotFound => "Governance operation not found",
+            VaultError::OperationAlreadyExecuted => "Governance operation already executed",
+            VaultError::OperationExpired => "Governance operation has expired",
+            VaultError::OperationAlreadySigned => "Signer has already signed this operation",
+            VaultError::ThresholdNotMet => "Signature threshold not met",
+            VaultError::InvalidThreshold => "Invalid signature threshold",
+            VaultError::CircuitBreakerTripped => "Circuit breaker tripped: share price movement limit exceeded",
         }
     }
 }
