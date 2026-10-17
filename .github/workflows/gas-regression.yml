@@ -37,7 +37,7 @@ jobs:
 
     steps:
       # ── Checkout ────────────────────────────────────────────────────────────
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # ── Rust toolchain ──────────────────────────────────────────────────────
       - name: Install Rust stable
@@ -268,7 +268,7 @@ jobs:
       # ── Post / update sticky PR comment ──────────────────────────────────────
       - name: Post gas benchmark comment on PR
         if: always() && github.event_name == 'pull_request'
-        uses: marocchino/sticky-pull-request-comment@v2
+        uses: marocchino/sticky-pull-request-comment@v3
         with:
           header: gas-report
           message: ${{ steps.comment.outputs.comment_body }}
