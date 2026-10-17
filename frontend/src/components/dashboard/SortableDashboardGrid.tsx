@@ -38,11 +38,17 @@ import { CSS } from "@dnd-kit/utilities";
 import { HeroCard } from "./HeroCard";
 import { ApyCard, DepositorCountCard, LastHarvestCard } from "./MetricCards";
 import { UserPositionCard, type UserPosition } from "./UserPositionCard";
+import { HarvestButton } from "@/components/HarvestButton";
+import { ReferralWidget } from "./ReferralWidget";
 import {
   useWidgetLayout,
   type WidgetId,
   type WidgetDescriptor,
 } from "@/lib/useWidgetLayout";
+import VaultPauseBanner from "@/components/VaultPauseBanner";
+import AdminPauseControls from "@/components/AdminPauseControls";
+import VaultActions from "@/components/VaultActions";
+import { useVaultPause } from "@/lib/useVaultPause";
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
@@ -54,6 +60,8 @@ interface VaultStats {
   depositorCount: number | null;
   lastHarvestAt: number | null;
   lastHarvestAmount: string | null;
+  /** Total vault shares — used to gate the keeper harvest button */
+  totalShares: number;
 }
 
 interface SortableWidgetProps {
@@ -61,8 +69,12 @@ interface SortableWidgetProps {
   stats: VaultStats | null;
   position: UserPosition | null;
   loading: boolean;
+  /** Connected wallet address (may be undefined) */
+  walletAddress?: string;
   /** True while this specific item is being dragged */
   isDragging: boolean;
+  /** Called after a successful harvest to trigger a stats refresh */
+  onRefresh?: () => void;
 }
 
 // ─── Helpers ───────────────────────────────────────────────────────────────────
@@ -91,11 +103,16 @@ function WidgetContent({
   stats,
   position,
   loading,
+  onRefresh,
+  walletAddress,
 }: {
   id: WidgetId;
   stats: VaultStats | null;
   position: UserPosition | null;
   loading: boolean;
+  /** Called after a successful harvest to trigger a stats refresh */
+  onRefresh?: () => void;
+  walletAddress?: string;
 }) {
   switch (id) {
     case "hero":
@@ -118,14 +135,22 @@ function WidgetContent({
       );
     case "last-harvest":
       return (
-        <LastHarvestCard
-          lastHarvestAt={stats?.lastHarvestAt ?? null}
-          lastHarvestAmount={stats?.lastHarvestAmount ?? null}
-          isLoading={loading}
-        />
+        <div className="flex flex-col gap-3">
+          <LastHarvestCard
+            lastHarvestAt={stats?.lastHarvestAt ?? null}
+            lastHarvestAmount={stats?.lastHarvestAmount ?? null}
+            isLoading={loading}
+          />
+          <HarvestButton
+            totalShares={stats?.totalShares ?? 0}
+            onHarvestComplete={onRefresh}
+          />
+        </div>
       );
     case "user-position":
       return <UserPositionCard position={position} isLoading={loading} />;
+    case "referral":
+      return <ReferralWidget address={walletAddress} isLoading={loading} />;
     default:
       return null;
   }
@@ -139,6 +164,8 @@ function SortableWidget({
   position,
   loading,
   isDragging,
+  onRefresh,
+  walletAddress,
 }: SortableWidgetProps) {
   const {
     attributes,
@@ -208,6 +235,8 @@ function SortableWidget({
         stats={stats}
         position={position}
         loading={loading}
+        onRefresh={onRefresh}
+        walletAddress={walletAddress}
       />
     </div>
   );
@@ -222,7 +251,13 @@ export function SortableDashboardGrid() {
   const [loading, setLoading] = useState(true);
   const [liveMsg, setLiveMsg] = useState("");
   const [activeId, setActiveId] = useState<WidgetId | null>(null);
+  const [connectedAddress, setConnectedAddress] = useState<string | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
+
+  // Derive wallet address from the user position (set when wallet is connected)
+  const walletAddress = position?.address || undefined;
+  // Vault pause state — shared down to VaultActions and AdminPauseControls.
+  const { isPaused, refresh: refreshPauseState } = useVaultPause();
 
   // Only render visible widgets
   const visibleWidgets = widgets.filter((w) => w.visible);
@@ -264,7 +299,7 @@ export function SortableDashboardGrid() {
       const visibleIter = reorderedVisible[Symbol.iterator]();
       const next = widgets.map((w) =>
         w.visible ? visibleIter.next().value : w
-      );
+      ).filter((w): w is import("@/lib/useWidgetLayout").WidgetDescriptor => w !== undefined);
 
       setOrder(next);
 
@@ -310,6 +345,7 @@ export function SortableDashboardGrid() {
         depositorCount: metrics.totalUsers ?? metrics.depositorCount ?? null,
         lastHarvestAt: metrics.lastHarvestAt ?? null,
         lastHarvestAmount: metrics.lastHarvestAmount ?? null,
+        totalShares: metrics.totalShares ?? assets.totalShares ?? 0,
       });
 
       if (assets.userBalance && assets.userShares) {
@@ -383,6 +419,22 @@ export function SortableDashboardGrid() {
     return () => clearInterval(interval);
   }, [fetchStats]);
 
+  // ── Wallet address detection ─────────────────────────────────────────────────
+  // WalletConnect persists the connected wallet state to localStorage.
+  // We read it so AdminPauseControls can compare against NEXT_PUBLIC_ADMIN_ADDRESS.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      const raw = localStorage.getItem("walletState");
+      if (raw) {
+        const parsed = JSON.parse(raw) as { address?: string };
+        if (parsed?.address) setConnectedAddress(parsed.address);
+      }
+    } catch {
+      // ignore parse errors
+    }
+  }, []);
+
   // ── Active drag overlay widget ───────────────────────────────────────────────
   const activeWidget = activeId
     ? widgets.find((w) => w.id === activeId)
@@ -403,6 +455,9 @@ export function SortableDashboardGrid() {
       >
         {liveMsg}
       </div>
+
+      {/* Vault pause banner — shown prominently when vault is paused */}
+      <VaultPauseBanner isPaused={isPaused} className="mb-6" />
 
       {/* Page heading */}
       <div className="mb-8">
@@ -446,6 +501,8 @@ export function SortableDashboardGrid() {
                 position={position}
                 loading={loading}
                 isDragging={activeId !== null}
+                onRefresh={fetchStats}
+                walletAddress={walletAddress}
               />
             ))}
           </div>
@@ -474,6 +531,7 @@ export function SortableDashboardGrid() {
                 stats={stats}
                 position={position}
                 loading={loading}
+                walletAddress={walletAddress}
               />
             </div>
           ) : null}
@@ -492,6 +550,29 @@ export function SortableDashboardGrid() {
           </p>
         </div>
       )}
+
+      {/* Vault action buttons — disabled when vault is paused */}
+      <section
+        aria-labelledby="actions-heading"
+        className="mt-8"
+      >
+        <h2
+          id="actions-heading"
+          className="mb-3 text-sm font-semibold uppercase tracking-wide text-zinc-500"
+        >
+          Actions
+        </h2>
+        <VaultActions isPaused={isPaused} />
+      </section>
+
+      {/* Admin-only pause / unpause control */}
+      <div className="mt-6">
+        <AdminPauseControls
+          isPaused={isPaused}
+          connectedAddress={connectedAddress}
+          onToggle={refreshPauseState}
+        />
+      </div>
     </main>
   );
 }
