@@ -102,7 +102,13 @@ const envSchema = z.object({
   GAS_DEFAULT_LIMIT: positiveInt(21_000),
 
   // ── Database ───────────────────────────────────────────────────────────────
-  DATABASE_URL: z.string().min(1, "DATABASE_URL is required"),
+  // In test mode, allow a safe local fallback so the app can boot without a
+  // developer-managed .env file. Production and staging still require a real DB URL.
+  DATABASE_URL: z
+    .string()
+    .min(1, "DATABASE_URL is required")
+    .optional()
+    .default("postgres://aura:changeme@localhost:5432/auravault_test"),
   DATABASE_REPLICA_URL: optionalStr,
 
   // ── Stellar ────────────────────────────────────────────────────────────────
@@ -112,6 +118,14 @@ const envSchema = z.object({
     .optional()
     .default("https://horizon-testnet.stellar.org"),
   VAULT_CONTRACT_ID: optionalStr,
+
+  // ── Harvest scheduler (#944) ────────────────────────────────────────────────
+  /**
+   * How many hours between automatic harvests. Translated to a cron expression
+   * by harvestRepeatableJob.ts. Default: 6 (every 6 hours: "0 *\/6 * * *").
+   */
+  HARVEST_INTERVAL_HOURS: positiveInt(6),
+  HARVEST_KEEPER_SECRET_ID: optionalStr,
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -133,6 +147,15 @@ function validateCrossFieldConstraints(
     errors.push(
       "JWT_SECRET is required in non-test environments. " +
       "Set a strong random secret of at least 32 characters."
+    );
+  }
+
+  // DATABASE_URL is required outside the test environment because the app
+  // must connect to a real write database in dev/staging/prod.
+  if (env.NODE_ENV !== "test" && !env.DATABASE_URL) {
+    errors.push(
+      "DATABASE_URL is required in non-test environments. " +
+      "Set a valid Postgres connection string."
     );
   }
 
@@ -288,12 +311,16 @@ export type DatabaseConfig = typeof databaseConfig;
 /**
  * Stellar / Horizon settings.
  *
- * @property horizonUrl      - Horizon REST API base URL
- * @property vaultContractId - On-chain Soroban contract address for the Aura Vault
+ * @property horizonUrl          - Horizon REST API base URL
+ * @property vaultContractId     - On-chain Soroban contract address for the Aura Vault
+ * @property harvestIntervalHours - Hours between automated harvests (default: 6)
+ * @property harvestKeeperSecretId - AWS Secrets Manager secret for the keeper keypair
  */
 export const stellarConfig = {
   horizonUrl: env.HORIZON_URL,
   vaultContractId: env.VAULT_CONTRACT_ID,
+  harvestIntervalHours: env.HARVEST_INTERVAL_HOURS,
+  harvestKeeperSecretId: env.HARVEST_KEEPER_SECRET_ID,
 } as const;
 
 export type StellarConfig = typeof stellarConfig;
