@@ -67,6 +67,9 @@ pub trait AuraVaultTrait {
     /// - `caller` — Address depositing tokens. Must authorise this call.
     /// - `amount` — Number of underlying tokens to deposit (in the token's
     ///   smallest unit, i.e. stroops for a 7-decimal token). Must be > 0.
+    /// - `nonce` — Per-address replay-protection counter.  Must equal the
+    ///   value returned by `get_nonce(caller)` at the time of signing.
+    ///   Incremented atomically on every successful deposit.
     ///
     /// # Returns
     ///
@@ -80,15 +83,17 @@ pub trait AuraVaultTrait {
     /// - [`VaultError::VaultPaused`] — vault is currently paused.
     /// - [`VaultError::BalanceMismatch`] — flash-loan guard tripped.
     /// - [`VaultError::MathOverflow`] — arithmetic overflow in share formula.
+    /// - [`VaultError::InvalidNonce`] — supplied nonce does not match stored nonce.
     ///
     /// # Examples
     ///
     /// ```no_run
     /// // In a Soroban test environment:
-    /// // let shares = vault_client.deposit(&caller, &1_000_000_i128);
+    /// // let nonce = vault_client.get_nonce(&caller);
+    /// // let shares = vault_client.deposit(&caller, &1_000_000_i128, &nonce);
     /// // assert!(shares > 0);
     /// ```
-    fn deposit(env: Env, caller: Address, amount: i128) -> Result<i128, VaultError>;
+    fn deposit(env: Env, caller: Address, amount: i128, nonce: u64) -> Result<i128, VaultError>;
 
     /// Burn vault shares and redeem the proportional underlying tokens.
     ///
@@ -547,4 +552,19 @@ pub trait AuraVaultTrait {
 
     /// Returns the number of decimal places used by vault shares (e.g. 7 for Stellar standard). Read-only.
     fn decimals(env: Env) -> u32;
+
+    /// Returns the current deposit nonce for `address`.
+    ///
+    /// The caller must supply this value as the `nonce` parameter of the next
+    /// `deposit` call to prove the deposit is fresh and cannot be replayed.
+    /// The nonce starts at `0` for every new address and is incremented
+    /// atomically on each successful deposit.
+    ///
+    /// Read-only; no authorization required.
+    ///
+    /// # Parameters
+    ///
+    /// - `env` — Soroban execution environment.
+    /// - `address` — The Stellar account address to query.
+    fn get_nonce(env: Env, address: Address) -> u64;
 }
