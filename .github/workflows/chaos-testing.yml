@@ -2,8 +2,9 @@ name: Chaos Testing
 
 on:
   schedule:
-    # Run monthly chaos tests on the first day of the month at midnight UTC
-    - cron: '0 0 1 * *'
+    # Issue #978: Run weekly chaos tests every Sunday at 02:00 UTC
+    # (was: monthly — changed to weekly per issue requirements)
+    - cron: '0 2 * * 0'
   workflow_dispatch:  # Allow manual triggering
 
 jobs:
@@ -37,7 +38,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -56,7 +57,7 @@ jobs:
           REDIS_URL: redis://localhost:6379
         run: npm run migrate
 
-      - name: Run chaos tests
+      - name: Run chaos tests (circuit breaker + resilience — Issue #870)
         working-directory: ./backend
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/aura_vault_test
@@ -64,6 +65,19 @@ jobs:
           HORIZON_URL: https://horizon-testnet.stellar.org
           NODE_ENV: staging
           CHAOS_ENABLED: 'true'
+        run: npm run test -- chaos.test.ts --reporter=verbose
+
+      - name: Run PostgreSQL primary failover chaos test (Issue #978)
+        working-directory: ./backend
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/aura_vault_test
+          DATABASE_REPLICA_URL: postgresql://postgres:postgres@localhost:5432/aura_vault_test
+          REDIS_URL: redis://localhost:6379
+          NODE_ENV: staging
+          CHAOS_ENABLED: 'true'
+          # CHAOS_DOCKER=true enables Testcontainers-based failover tests
+          # that spin up their own ephemeral PostgreSQL containers.
+          CHAOS_DOCKER: 'true'
         run: npm run test -- chaos.test.ts --reporter=verbose
 
       - name: Run resilience tests with service killing
@@ -100,7 +114,7 @@ jobs:
 
       - name: Report chaos test results
         if: always()
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             const fs = require('fs');
@@ -122,7 +136,7 @@ jobs:
 
       - name: Send Slack notification on failure
         if: failure()
-        uses: slackapi/slack-github-action@v1
+        uses: slackapi/slack-github-action@v4
         with:
           webhook-url: ${{ secrets.SLACK_CHAOS_WEBHOOK }}
           payload: |
