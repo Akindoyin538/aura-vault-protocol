@@ -749,5 +749,49 @@ pub trait AuraVaultTrait {
     ///
     /// Read-only; no authorization required.  Never reverts.
     fn check_invariants(env: Env) -> InvariantCheckResult;
+
+    // -----------------------------------------------------------------------
+    // Batch deposit (Issue #932)
+    // -----------------------------------------------------------------------
+
+    /// Deposit tokens on behalf of multiple recipients in a single transaction.
+    ///
+    /// The `caller` transfers the total sum of all `amounts` upfront and shares
+    /// are minted individually for each recipient using the current exchange
+    /// rate at the time of the call.
+    ///
+    /// Batch size is limited to **50 recipients** to bound gas usage.
+    ///
+    /// Emits one `deposit` event per recipient plus a single
+    /// `batch_deposit_completed` event containing the total deposited amount
+    /// and the number of recipients processed.
+    ///
+    /// # Parameters
+    ///
+    /// - `env` — Soroban execution environment.
+    /// - `caller` — Address transferring tokens for all recipients. Must
+    ///   authorise this call and hold sufficient token balance.
+    /// - `recipients` — List of `(recipient_address, amount)` pairs. Must be
+    ///   non-empty and contain ≤ 50 entries. Each amount must be > 0.
+    ///
+    /// # Returns
+    ///
+    /// A `Vec<i128>` of shares minted for each recipient, in the same order as
+    /// the `recipients` input.
+    ///
+    /// # Errors
+    ///
+    /// - [`VaultError::BatchEmpty`] — `recipients` list is empty.
+    /// - [`VaultError::BatchTooLarge`] — `recipients` list exceeds 50 entries.
+    /// - [`VaultError::ZeroAmount`] — any individual amount is ≤ 0, or a share
+    ///   formula rounds to zero.
+    /// - [`VaultError::NotInitialized`] — vault has not been initialised.
+    /// - [`VaultError::VaultPaused`] — vault is currently paused.
+    /// - [`VaultError::BalanceMismatch`] — flash-loan guard tripped.
+    /// - [`VaultError::MathOverflow`] — arithmetic overflow in total or share
+    ///   formula.
+    /// - [`VaultError::TvlCapExceeded`] — total deposit would push vault above
+    ///   the configured TVL cap.
+    fn batch_deposit(env: Env, caller: Address, recipients: Vec<(Address, i128)>) -> Result<Vec<i128>, VaultError>;
 }
 

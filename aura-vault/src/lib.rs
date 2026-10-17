@@ -167,6 +167,8 @@ pub const YIELD_PRECISION: i128 = 1_000_000_000_000;
 
 /// Maximum withdrawal fee in basis points (5%).
 pub const MAX_WITHDRAWAL_FEE_BPS: u32 = 500;
+/// Maximum number of recipients allowed in a single batch_deposit call (Issue #932).
+pub const MAX_BATCH_SIZE: u32 = 50;
 pub const ROLE_ADMIN: u32 = storage::ADMIN_ROLE;
 pub const ROLE_KEEPER: u32 = storage::KEEPER_ROLE;
 pub const ROLE_GUARDIAN: u32 = storage::GUARDIAN_ROLE;
@@ -509,6 +511,217 @@ impl AuraVault {
             bump_instance(&env);
 
             Ok(new_shares)
+        })
+    }
+
+    // -----------------------------------------------------------------------
+    // batch_deposit (Issue #932)
+    //
+    // Deposits tokens on behalf of multiple recipients in a single call.
+    // The caller transfers the total sum upfront; shares are minted
+    // individually per recipient using the current exchange rate.
+    //
+    // Batch size is capped at MAX_BATCH_SIZE (50) to bound gas.
+    //
+    // Events:
+    //   - one ("deposit", recipient, amount) per recipient
+    //   - one ("batch_deposit_completed", caller) → (total_amount, recipient_count)
+    //
+    // Security:
+    //   - CEI ordering: total transfer in first, then state updates per recipient
+    //   - Flash-loan guard checked once before the transfer
+    //   - Reentrancy guard wraps the entire function
+    //   - TVL cap checked against total_amount before any transfer
+    // -----------------------------------------------------------------------
+    /// Deposit tokens on behalf of multiple recipients in a single transaction.
+    ///
+    /// `caller` transfers the **total sum** of all amounts upfront. Shares are
+    /// computed and credited individually for each recipient using the current
+    /// exchange rate at call time.
+    ///
+    /// # Batch limit
+    ///
+    /// A maximum of **50 recipients** per call is enforced to bound ledger gas.
+    ///
+    /// # Parameters
+    ///
+    /// - `env` — Soroban execution environment.
+    /// - `caller` — Address that transfers tokens for all recipients.
+    ///   Must authorise this call.
+    /// - `recipients` — `Vec<(Address, i128)>` of (recipient, amount) pairs.
+    ///   Must be non-empty and ≤ 50 entries. Every amount must be > 0.
+    ///
+    /// # Returns
+    ///
+    /// `Vec<i128>` of shares minted per recipient, in input order.
+    ///
+    /// # Errors
+    ///
+    /// - [`VaultError::BatchEmpty`] — `recipients` is empty.
+    /// - [`VaultError::BatchTooLarge`] — more than 50 recipients supplied.
+    /// - [`VaultError::ZeroAmount`] — any individual amount ≤ 0, or a share
+    ///   formula rounds to zero.
+    /// - [`VaultError::NotInitialized`] — vault not yet initialised.
+    /// - [`VaultError::VaultPaused`] — vault is paused.
+    /// - [`VaultError::BalanceMismatch`] — flash-loan guard tripped.
+    /// - [`VaultError::MathOverflow`] — arithmetic overflow.
+    /// - [`VaultError::TvlCapExceeded`] — total deposit would exceed TVL cap.
+    pub fn batch_deposit(
+        env: Env,
+        caller: Address,
+        recipients: Vec<(Address, i128)>,
+    ) -> Result<Vec<i128>, VaultError> {
+        with_reentrancy_guard(&env, || {
+            caller.require_auth();
+
+            // ---- Checks -------------------------------------------------------
+
+            let recipient_count = recipients.len();
+
+            if recipient_count == 0 {
+                return Err(VaultError::BatchEmpty);
+            }
+            if recipient_count > MAX_BATCH_SIZE {
+                return Err(VaultError::BatchTooLarge);
+            }
+            if get_admin(&env).is_none() {
+                return Err(VaultError::NotInitialized);
+            }
+            if storage_is_paused(&env) {
+                return Err(VaultError::VaultPaused);
+            }
+
+            // Validate every amount and compute the total in a single pass.
+            let mut total_amount: i128 = 0;
+            for i in 0..recipient_count {
+                let (_, amount) = recipients.get(i).unwrap();
+                if amount <= 0 {
+                    return Err(VaultError::ZeroAmount);
+                }
+                total_amount = total_amount
+                    .checked_add(amount)
+                    .ok_or(VaultError::MathOverflow)?;
+            }
+
+            // TVL cap check (0 = unlimited)
+            let tvl_cap = get_tvl_cap(&env);
+            if tvl_cap > 0 {
+                let current_total = get_total_deposited(&env);
+                let after_deposit = current_total
+                    .checked_add(total_amount)
+                    .ok_or(VaultError::MathOverflow)?;
+                if after_deposit > tvl_cap {
+                    return Err(VaultError::TvlCapExceeded);
+                }
+            }
+
+            let token_addr = get_token(&env).ok_or(VaultError::NotInitialized)?;
+            let token = token::Client::new(&env, &token_addr);
+            let vault_addr = env.current_contract_address();
+
+            // Flash-loan guard: actual balance must match tracked state before deposit.
+            let balance_before = token.balance(&vault_addr);
+            let total_deposited_before = get_total_deposited(&env);
+            if balance_before != total_deposited_before {
+                env.events().publish(
+                    (Symbol::new(&env, "suspicious"),),
+                    (Symbol::new(&env, "balance_mismatch"), balance_before, total_deposited_before),
+                );
+                return Err(VaultError::BalanceMismatch);
+            }
+
+            // ---- Interaction: single transfer of the total amount from caller ----
+            let pre_deposit_balance = token.balance(&vault_addr);
+            token.transfer(&caller, &vault_addr, &total_amount);
+            assert_incoming_transfer(&token, &vault_addr, pre_deposit_balance, total_amount)?;
+
+            // ---- Effects: mint shares per recipient ------------------------------
+            //
+            // After the transfer we read the global totals once and update them
+            // incrementally. We capture total_shares and total_deposited before
+            // the loop so every recipient's shares are computed against the
+            // same baseline (fair proportional minting across the batch).
+
+            let mut running_total_shares = get_total_shares(&env);
+            let mut running_total_deposited = get_total_deposited(&env);
+
+            let mut minted_shares: Vec<i128> = Vec::new(&env);
+
+            for i in 0..recipient_count {
+                let (recipient, amount) = recipients.get(i).unwrap();
+
+                // Share formula — same as single deposit()
+                let new_shares: i128 = if running_total_shares == 0 || running_total_deposited == 0 {
+                    amount
+                } else {
+                    let numerator = amount
+                        .checked_mul(running_total_shares)
+                        .ok_or(VaultError::MathOverflow)?;
+                    numerator
+                        .checked_div(running_total_deposited)
+                        .ok_or(VaultError::MathOverflow)?
+                };
+
+                if new_shares <= 0 {
+                    return Err(VaultError::ZeroAmount);
+                }
+
+                // Update recipient balance
+                let old_balance = get_balance(&env, &recipient);
+                let new_balance = old_balance
+                    .checked_add(new_shares)
+                    .ok_or(VaultError::MathOverflow)?;
+                set_balance(&env, &recipient, new_balance);
+
+                // Update yield checkpoint so new recipients start with no
+                // outstanding yield debt from before their deposit.
+                storage::set_user_checkpoint(&env, &recipient, storage::get_cumulative_yps(&env));
+                storage::set_user_pending_yield(
+                    &env,
+                    &recipient,
+                    storage::get_user_pending_yield(&env, &recipient),
+                );
+
+                // Accumulate running totals
+                running_total_shares = running_total_shares
+                    .checked_add(new_shares)
+                    .ok_or(VaultError::MathOverflow)?;
+                running_total_deposited = running_total_deposited
+                    .checked_add(amount)
+                    .ok_or(VaultError::MathOverflow)?;
+
+                // Per-recipient deposit event (matches single deposit() format)
+                let share_price: i128 = if running_total_shares > 0 {
+                    running_total_deposited
+                        .checked_mul(10_000_000)
+                        .and_then(|v| v.checked_div(running_total_shares))
+                        .unwrap_or(0)
+                } else {
+                    10_000_000
+                };
+                let timestamp = env.ledger().timestamp();
+                env.events().publish(
+                    (Symbol::new(&env, "deposit"), recipient.clone(), amount),
+                    (new_shares, running_total_shares, running_total_deposited, share_price, timestamp),
+                );
+
+                bump_persistent(&env, &recipient);
+                minted_shares.push_back(new_shares);
+            }
+
+            // Persist final running totals
+            set_total_shares(&env, running_total_shares);
+            set_total_deposited(&env, running_total_deposited);
+
+            // Summary event for the whole batch
+            env.events().publish(
+                (Symbol::new(&env, "batch_deposit_completed"), caller),
+                (total_amount, recipient_count as u32),
+            );
+
+            bump_instance(&env);
+
+            Ok(minted_shares)
         })
     }
 
@@ -2520,6 +2733,8 @@ impl AuraVault {
             28 => Some(VaultError::NotWhitelisted.message()),
             29 => Some(VaultError::BelowMinDeposit.message()),
             30 => Some(VaultError::Reentrancy.message()),
+            42 => Some(VaultError::BatchTooLarge.message()),
+            43 => Some(VaultError::BatchEmpty.message()),
             _  => None,
         };
         msg.map(|s| soroban_sdk::String::from_str(&env, s))

@@ -1357,3 +1357,290 @@ fn test_check_invariants_failing_variant_has_description() {
         InvariantCheckResult::AllPassed => panic!("expected Failing"),
     }
 }
+
+// ---------------------------------------------------------------------------
+// batch_deposit tests (Issue #932)
+// ---------------------------------------------------------------------------
+
+// Helper: build a soroban_sdk Vec<(Address, i128)> from a std slice
+fn make_recipients(env: &Env, pairs: &[(Address, i128)]) -> Vec<(Address, i128)> {
+    let mut v: Vec<(Address, i128)> = Vec::new(env);
+    for (addr, amount) in pairs {
+        v.push_back((addr.clone(), *amount));
+    }
+    v
+}
+
+// ---- Error paths -----------------------------------------------------------
+
+#[test]
+fn test_batch_deposit_empty_returns_batch_empty() {
+    let (env, vault, _admin, _token) = setup();
+    let caller = Address::generate(&env);
+    let recipients: Vec<(Address, i128)> = Vec::new(&env);
+    let result = vault.try_batch_deposit(&caller, &recipients);
+    assert_eq!(result, Err(Ok(VaultError::BatchEmpty)));
+}
+
+#[test]
+fn test_batch_deposit_too_large_returns_batch_too_large() {
+    let (env, vault, admin, token) = setup();
+    let caller = Address::generate(&env);
+
+    // Build 51 recipients (one over the limit of 50)
+    let mut pairs: std::vec::Vec<(Address, i128)> = std::vec::Vec::new();
+    for _ in 0..51 {
+        pairs.push((Address::generate(&env), 1_000));
+    }
+    let total: i128 = 51 * 1_000;
+    mint(&env, &token, &admin, &caller, total);
+
+    let recipients = make_recipients(&env, &pairs);
+    let result = vault.try_batch_deposit(&caller, &recipients);
+    assert_eq!(result, Err(Ok(VaultError::BatchTooLarge)));
+}
+
+#[test]
+fn test_batch_deposit_zero_amount_returns_zero_amount() {
+    let (env, vault, admin, token) = setup();
+    let caller = Address::generate(&env);
+    let r1 = Address::generate(&env);
+    let r2 = Address::generate(&env);
+
+    mint(&env, &token, &admin, &caller, 1_000_000);
+    let recipients = make_recipients(&env, &[(r1, 500_000), (r2, 0)]);
+    let result = vault.try_batch_deposit(&caller, &recipients);
+    assert_eq!(result, Err(Ok(VaultError::ZeroAmount)));
+}
+
+#[test]
+fn test_batch_deposit_negative_amount_returns_zero_amount() {
+    let (env, vault, admin, token) = setup();
+    let caller = Address::generate(&env);
+    let r1 = Address::generate(&env);
+
+    mint(&env, &token, &admin, &caller, 1_000_000);
+    let recipients = make_recipients(&env, &[(r1, -500)]);
+    let result = vault.try_batch_deposit(&caller, &recipients);
+    assert_eq!(result, Err(Ok(VaultError::ZeroAmount)));
+}
+
+#[test]
+fn test_batch_deposit_paused_returns_vault_paused() {
+    let (env, vault, admin, token) = setup();
+    let caller = Address::generate(&env);
+    let r1 = Address::generate(&env);
+
+    mint(&env, &token, &admin, &caller, 1_000_000);
+    vault.pause(&admin);
+
+    let recipients = make_recipients(&env, &[(r1, 1_000_000)]);
+    let result = vault.try_batch_deposit(&caller, &recipients);
+    assert_eq!(result, Err(Ok(VaultError::VaultPaused)));
+}
+
+#[test]
+fn test_batch_deposit_tvl_cap_exceeded() {
+    let (env, vault, admin, token) = setup();
+    let caller = Address::generate(&env);
+    let r1 = Address::generate(&env);
+    let r2 = Address::generate(&env);
+
+    // Set a TVL cap of 1_000_000
+    vault.set_tvl_cap(&admin, &1_000_000_i128);
+
+    mint(&env, &token, &admin, &caller, 2_000_000);
+    // Try to deposit 600_000 + 600_000 = 1_200_000, exceeding cap
+    let recipients = make_recipients(&env, &[(r1, 600_000), (r2, 600_000)]);
+    let result = vault.try_batch_deposit(&caller, &recipients);
+    assert_eq!(result, Err(Ok(VaultError::TvlCapExceeded)));
+}
+
+// ---- Happy paths -----------------------------------------------------------
+
+#[test]
+fn test_batch_deposit_single_recipient_first_deposit() {
+    let (env, vault, admin, token) = setup();
+    let caller = Address::generate(&env);
+    let r1 = Address::generate(&env);
+
+    mint(&env, &token, &admin, &caller, 1_000_000);
+    let recipients = make_recipients(&env, &[(r1.clone(), 1_000_000)]);
+    let shares = vault.batch_deposit(&caller, &recipients);
+
+    // First depositor gets 1:1 shares
+    assert_eq!(shares.get(0).unwrap(), 1_000_000);
+    assert_eq!(vault.balance_of(&r1), 1_000_000);
+    assert_eq!(vault.total_assets(), 1_000_000);
+    assert_eq!(vault.total_shares(), 1_000_000);
+}
+
+#[test]
+fn test_batch_deposit_multiple_recipients_all_credited() {
+    let (env, vault, admin, token) = setup();
+    let caller = Address::generate(&env);
+    let r1 = Address::generate(&env);
+    let r2 = Address::generate(&env);
+    let r3 = Address::generate(&env);
+
+    let total = 3_000_000_i128;
+    mint(&env, &token, &admin, &caller, total);
+
+    let recipients = make_recipients(
+        &env,
+        &[(r1.clone(), 1_000_000), (r2.clone(), 1_000_000), (r3.clone(), 1_000_000)],
+    );
+    let shares = vault.batch_deposit(&caller, &recipients);
+
+    // First recipient is the seed depositor (1:1)
+    assert_eq!(shares.get(0).unwrap(), 1_000_000);
+    // Subsequent recipients should also get correct shares (equal amounts, 1:1 still)
+    assert_eq!(shares.get(1).unwrap(), 1_000_000);
+    assert_eq!(shares.get(2).unwrap(), 1_000_000);
+
+    assert_eq!(vault.balance_of(&r1), 1_000_000);
+    assert_eq!(vault.balance_of(&r2), 1_000_000);
+    assert_eq!(vault.balance_of(&r3), 1_000_000);
+    assert_eq!(vault.total_assets(), 3_000_000);
+    assert_eq!(vault.total_shares(), 3_000_000);
+}
+
+#[test]
+fn test_batch_deposit_caller_not_credited() {
+    // The caller is the operator transferring funds; they should receive no shares
+    let (env, vault, admin, token) = setup();
+    let caller = Address::generate(&env);
+    let r1 = Address::generate(&env);
+
+    mint(&env, &token, &admin, &caller, 500_000);
+    let recipients = make_recipients(&env, &[(r1.clone(), 500_000)]);
+    vault.batch_deposit(&caller, &recipients);
+
+    // Caller's share balance must remain 0
+    assert_eq!(vault.balance_of(&caller), 0);
+}
+
+#[test]
+fn test_batch_deposit_correct_share_formula_after_existing_deposits() {
+    // Seed the vault first, then use batch_deposit so the share formula applies.
+    // After seeding: 1_000_000 shares, 1_200_000 assets (after harvest).
+    // Batch deposits 600_000 → floor(600_000 × 1_000_000 / 1_200_000) = 500_000 shares.
+    let (env, vault, admin, token) = setup();
+
+    let seeder = Address::generate(&env);
+    mint(&env, &token, &admin, &seeder, 1_000_000);
+    vault.deposit(&seeder, &1_000_000);
+
+    // Inject yield to skew the exchange rate (no new shares minted)
+    mint(&env, &token, &admin, &admin, 200_000);
+    vault.harvest(&admin, &200_000);
+
+    let caller = Address::generate(&env);
+    let r1 = Address::generate(&env);
+    mint(&env, &token, &admin, &caller, 600_000);
+
+    let recipients = make_recipients(&env, &[(r1.clone(), 600_000)]);
+    let shares = vault.batch_deposit(&caller, &recipients);
+
+    assert_eq!(shares.get(0).unwrap(), 500_000);
+    assert_eq!(vault.balance_of(&r1), 500_000);
+}
+
+#[test]
+fn test_batch_deposit_shares_returns_correct_length() {
+    let (env, vault, admin, token) = setup();
+    let caller = Address::generate(&env);
+
+    let n = 5_u32;
+    let amount_each = 100_000_i128;
+    let total = amount_each * n as i128;
+    mint(&env, &token, &admin, &caller, total);
+
+    let mut pairs: std::vec::Vec<(Address, i128)> = std::vec::Vec::new();
+    for _ in 0..n {
+        pairs.push((Address::generate(&env), amount_each));
+    }
+    let recipients = make_recipients(&env, &pairs);
+    let shares = vault.batch_deposit(&caller, &recipients);
+
+    assert_eq!(shares.len(), n);
+}
+
+#[test]
+fn test_batch_deposit_exactly_50_recipients_succeeds() {
+    let (env, vault, admin, token) = setup();
+    let caller = Address::generate(&env);
+
+    let n = 50_u32;
+    let amount_each = 10_000_i128;
+    let total = amount_each * n as i128;
+    mint(&env, &token, &admin, &caller, total);
+
+    let mut pairs: std::vec::Vec<(Address, i128)> = std::vec::Vec::new();
+    for _ in 0..n {
+        pairs.push((Address::generate(&env), amount_each));
+    }
+    let recipients = make_recipients(&env, &pairs);
+    let result = vault.try_batch_deposit(&caller, &recipients);
+    assert!(result.is_ok(), "batch of 50 should succeed");
+}
+
+#[test]
+fn test_batch_deposit_total_assets_matches_sum() {
+    let (env, vault, admin, token) = setup();
+    let caller = Address::generate(&env);
+
+    let amounts = [500_000_i128, 200_000, 300_000];
+    let total: i128 = amounts.iter().sum();
+    mint(&env, &token, &admin, &caller, total);
+
+    let pairs: std::vec::Vec<(Address, i128)> = amounts
+        .iter()
+        .map(|&a| (Address::generate(&env), a))
+        .collect();
+    let recipients = make_recipients(&env, &pairs);
+    vault.batch_deposit(&caller, &recipients);
+
+    assert_eq!(vault.total_assets(), total);
+}
+
+#[test]
+fn test_batch_deposit_recipient_can_withdraw_afterwards() {
+    let (env, vault, admin, token) = setup();
+    let caller = Address::generate(&env);
+    let r1 = Address::generate(&env);
+
+    mint(&env, &token, &admin, &caller, 1_000_000);
+    let recipients = make_recipients(&env, &[(r1.clone(), 1_000_000)]);
+    vault.batch_deposit(&caller, &recipients);
+
+    let shares = vault.balance_of(&r1);
+    assert!(shares > 0);
+
+    // r1 should be able to withdraw their shares normally
+    let redeemed = vault.withdraw(&r1, &shares);
+    assert_eq!(redeemed, 1_000_000);
+    assert_eq!(vault.balance_of(&r1), 0);
+}
+
+#[test]
+fn test_batch_deposit_mixed_amounts_individual_shares_correct() {
+    // Batch: r1 gets 3x more tokens than r2; shares should reflect that.
+    let (env, vault, admin, token) = setup();
+    let caller = Address::generate(&env);
+    let r1 = Address::generate(&env);
+    let r2 = Address::generate(&env);
+
+    // Empty vault, so first recipient gets 1:1 and second uses the running total.
+    mint(&env, &token, &admin, &caller, 4_000_000);
+    let recipients = make_recipients(
+        &env,
+        &[(r1.clone(), 3_000_000), (r2.clone(), 1_000_000)],
+    );
+    vault.batch_deposit(&caller, &recipients);
+
+    // r1: 3_000_000 shares (first/seed deposit)
+    // r2: floor(1_000_000 × 3_000_000 / 3_000_000) = 1_000_000 shares
+    assert_eq!(vault.balance_of(&r1), 3_000_000);
+    assert_eq!(vault.balance_of(&r2), 1_000_000);
+}
