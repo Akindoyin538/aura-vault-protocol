@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { ThemeToggle } from "@/components/ThemeToggle";
+import SharePriceAlertPanel from "@/components/SharePriceAlertPanel";
 import "@/lib/i18n";
 
 interface Settings {
@@ -149,6 +150,11 @@ export default function SettingsContent() {
               </div>
             )}
           </div>
+        </section>
+
+        {/* Share Price Alerts (Issue #908) */}
+        <section className="mb-8">
+          <SharePriceAlertPanel />
         </section>
 
         {/* Security */}

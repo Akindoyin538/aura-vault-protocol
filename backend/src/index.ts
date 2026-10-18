@@ -55,6 +55,7 @@ import {
 import { startYieldWorker, stopYieldWorker } from "./services/yieldWorker.js";
 import { startHarvestRepeatableJob, stopHarvestRepeatableJob } from "./services/harvestRepeatableJob.js";
 import { startAlertEvaluationJob, stopAlertEvaluationJob } from "./services/alertEvaluationJob.js";
+import { startSharePriceAlertWorker, stopSharePriceAlertWorker } from "./services/sharePriceAlertWorker.js";
 import { vaultRouter } from "./routes/vaultRoutes.js";
 import { vaultTransactionRouter } from "./routes/vaultTransactionRoutes.js";
 import { vaultRegistryRouter } from "./routes/vaultRegistryRoutes.js";
@@ -296,6 +297,7 @@ const server = app.listen(PORT, () => {
   startVaultSyncJob();        // issue #942: background TVL/APY sync for vault registry
   void startHarvestRepeatableJob(); // issue #944: BullMQ repeatable harvest cron job
   void startAlertEvaluationJob();  // issue #946: alert threshold evaluation every 5 min
+  startSharePriceAlertWorker();    // issue #908: hourly share price alert evaluation
   startAnalyticsCacheWarmer();
   void warmCache();           // existing DeFi price warm-up
   void runCacheWarmup();      // issue #325: vault stats / share price / top depositors
@@ -319,6 +321,7 @@ async function shutdown(signal: string): Promise<void> {
   stopEmailWorker();
   stopUserExportWorker();
   stopYieldWorker();
+  stopSharePriceAlertWorker(); // issue #908
   stopVaultSyncJob();         // issue #942
   await stopHarvestRepeatableJob(); // issue #944
   await stopAlertEvaluationJob();  // issue #946
