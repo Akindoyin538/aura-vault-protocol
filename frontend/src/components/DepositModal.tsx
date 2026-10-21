@@ -22,6 +22,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { AccessibleModal, AmountInput, FormField, FormErrorMessage } from "./AccessibleFormComponents";
+import PreSignBreakdown from "./PreSignBreakdown";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -83,7 +84,7 @@ function Spinner() {
 
 const STEP_LABELS: Record<DepositStep, string> = {
   1: "Amount",
-  2: "Review",
+  2: "Fees",
   3: "Result",
 };
 
@@ -236,7 +237,7 @@ export function DepositModal({
   async function handleNext() {
     if (step === 1) {
       if (!validate()) return;
-      await fetchGasEstimate(amount);
+      // Step 2 is now PreSignBreakdown which fetches its own fee data (#885)
       setStep(2);
     } else if (step === 2) {
       await handleSubmit();
@@ -268,7 +269,7 @@ export function DepositModal({
 
   const titleMap: Record<DepositStep, string> = {
     1: "Deposit",
-    2: "Review Deposit",
+    2: "Fee Breakdown",
     3: txStatus === "success" ? "Deposit Successful" : txStatus === "error" ? "Deposit Failed" : "Processing…",
   };
 
@@ -286,7 +287,7 @@ export function DepositModal({
       {/* Accessible live region — announces step transitions */}
       <div role="status" aria-live="polite" aria-atomic="true" className="sr-only">
         {step === 1 && "Step 1 of 3: Enter deposit amount."}
-        {step === 2 && "Step 2 of 3: Review your deposit details."}
+        {step === 2 && "Step 2 of 3: Review fee breakdown before signing."}
         {step === 3 && txStatus === "pending" && "Processing your deposit…"}
         {step === 3 && txStatus === "success" && "Deposit successful!"}
         {step === 3 && txStatus === "error" && `Deposit failed: ${txError}`}
@@ -377,62 +378,14 @@ export function DepositModal({
         </div>
       )}
 
-      {/* ── Step 2: Review ───────────────────────────────────────────────── */}
+      {/* ── Step 2: Fee Breakdown (#885) ────────────────────────────────── */}
       {step === 2 && (
-        <div className="flex flex-col gap-5">
-          {/* Summary table */}
-          <dl className="rounded-lg border border-zinc-200 dark:border-zinc-700 divide-y divide-zinc-100 dark:divide-zinc-800">
-            {[
-              { label: "You deposit", value: `${amount} USDC` },
-              { label: "Estimated shares", value: `${estimatedShares} aUSDC` },
-            ].map(({ label, value }) => (
-              <div key={label} className="flex justify-between px-4 py-3 text-sm">
-                <dt className="text-zinc-500 dark:text-zinc-400">{label}</dt>
-                <dd className="font-mono font-semibold text-zinc-900 dark:text-zinc-50">{value}</dd>
-              </div>
-            ))}
-          </dl>
-
-          {/* Gas estimate */}
-          <div className="rounded-lg bg-zinc-50 dark:bg-zinc-800 px-4 py-3 space-y-2">
-            <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400 mb-1">
-              Estimated Gas Fee
-            </p>
-            {gasLoading ? (
-              <div className="flex items-center gap-2 text-sm text-zinc-400">
-                <Spinner />
-                Fetching estimate…
-              </div>
-            ) : gasEstimate ? (
-              <>
-                <GasEstimateRow label="Base fee" value={gasEstimate.baseFee} />
-                <GasEstimateRow label="Priority fee" value={gasEstimate.priorityFee} />
-                <div className="border-t border-zinc-200 dark:border-zinc-700 pt-2 mt-1">
-                  <GasEstimateRow label="Total" value={gasEstimate.totalGas} />
-                </div>
-              </>
-            ) : null}
-          </div>
-
-          <div className="flex gap-3">
-            <button
-              type="button"
-              onClick={() => setStep(1)}
-              className="flex-1 rounded-lg border border-zinc-300 dark:border-zinc-600 text-zinc-700 dark:text-zinc-300 font-semibold py-2.5 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-600"
-            >
-              Back
-            </button>
-            <button
-              type="button"
-              onClick={() => void handleNext()}
-              disabled={gasLoading}
-              data-cy="deposit-confirm-btn"
-              className="flex-1 rounded-lg bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold py-2.5 transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-600 focus:ring-offset-2"
-            >
-              Confirm & Sign
-            </button>
-          </div>
-        </div>
+        <PreSignBreakdown
+          type="deposit"
+          amount={amount}
+          onCancel={() => setStep(1)}
+          onProceed={() => { void handleSubmit(); }}
+        />
       )}
 
       {/* ── Step 3: Result ───────────────────────────────────────────────── */}

@@ -24,6 +24,7 @@ import {
   ShareInput,
   FormField,
 } from "./AccessibleFormComponents";
+import PreSignBreakdown from "./PreSignBreakdown";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -82,7 +83,7 @@ function Spinner() {
 
 const STEP_LABELS: Record<WithdrawStep, string> = {
   1: "Shares",
-  2: "Review",
+  2: "Fees",
   3: "Result",
 };
 
@@ -249,7 +250,7 @@ export function WithdrawModal({
   async function handleNext() {
     if (step === 1) {
       if (!validate()) return;
-      await fetchGasEstimate(shares);
+      // Step 2 is PreSignBreakdown which fetches its own fee data (#885)
       setStep(2);
     } else if (step === 2) {
       await handleSubmit();
@@ -280,7 +281,7 @@ export function WithdrawModal({
 
   const titleMap: Record<WithdrawStep, string> = {
     1: "Withdraw",
-    2: "Review Withdrawal",
+    2: "Fee Breakdown",
     3:
       txStatus === "success"
         ? "Withdrawal Successful"
@@ -396,62 +397,14 @@ export function WithdrawModal({
         </div>
       )}
 
-      {/* ── Step 2: Review ───────────────────────────────────────────────── */}
+      {/* ── Step 2: Fee Breakdown (#885) ────────────────────────────────── */}
       {step === 2 && (
-        <div className="flex flex-col gap-5">
-          {/* Summary table */}
-          <dl className="rounded-lg border border-zinc-200 dark:border-zinc-700 divide-y divide-zinc-100 dark:divide-zinc-800">
-            {[
-              { label: "Shares to burn", value: `${shares} ${shareSymbol}` },
-              { label: "Estimated USDC", value: `${estimatedTokens} USDC` },
-            ].map(({ label, value }) => (
-              <div key={label} className="flex justify-between px-4 py-3 text-sm">
-                <dt className="text-zinc-500 dark:text-zinc-400">{label}</dt>
-                <dd className="font-mono font-semibold text-zinc-900 dark:text-zinc-50">{value}</dd>
-              </div>
-            ))}
-          </dl>
-
-          {/* Gas estimate */}
-          <div className="rounded-lg bg-zinc-50 dark:bg-zinc-800 px-4 py-3 space-y-2">
-            <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400 mb-1">
-              Estimated Gas Fee
-            </p>
-            {gasLoading ? (
-              <div className="flex items-center gap-2 text-sm text-zinc-400">
-                <Spinner />
-                Fetching estimate…
-              </div>
-            ) : gasEstimate ? (
-              <>
-                <GasEstimateRow label="Base fee" value={gasEstimate.baseFee} />
-                <GasEstimateRow label="Priority fee" value={gasEstimate.priorityFee} />
-                <div className="border-t border-zinc-200 dark:border-zinc-700 pt-2 mt-1">
-                  <GasEstimateRow label="Total" value={gasEstimate.totalGas} />
-                </div>
-              </>
-            ) : null}
-          </div>
-
-          <div className="flex gap-3">
-            <button
-              type="button"
-              onClick={() => setStep(1)}
-              className="flex-1 rounded-lg border border-zinc-300 dark:border-zinc-600 text-zinc-700 dark:text-zinc-300 font-semibold py-2.5 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors focus:outline-none focus:ring-2 focus:ring-orange-500"
-            >
-              Back
-            </button>
-            <button
-              type="button"
-              onClick={() => void handleNext()}
-              disabled={gasLoading}
-              data-cy="withdraw-confirm-btn"
-              className="flex-1 rounded-lg bg-orange-500 hover:bg-orange-600 disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold py-2.5 transition-colors focus:outline-none focus:ring-2 focus:ring-orange-500 focus:ring-offset-2"
-            >
-              Confirm & Sign
-            </button>
-          </div>
-        </div>
+        <PreSignBreakdown
+          type="withdraw"
+          amount={shares}
+          onCancel={() => setStep(1)}
+          onProceed={() => { void handleSubmit(); }}
+        />
       )}
 
       {/* ── Step 3: Result ───────────────────────────────────────────────── */}
