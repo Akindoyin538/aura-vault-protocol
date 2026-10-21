@@ -24,6 +24,7 @@ import {
   ShareInput,
   FormField,
 } from "./AccessibleFormComponents";
+import RedemptionPreview from "./RedemptionPreview";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -365,25 +366,11 @@ export function WithdrawModal({
             ))}
           </div>
 
-          {/* Real-time token preview */}
-          {parseFloat(shares) > 0 && !sharesError && (
-            <div
-              role="status"
-              aria-live="polite"
-              aria-atomic="true"
-              className="rounded-lg border border-orange-200 dark:border-orange-800 bg-orange-50 dark:bg-orange-950 px-4 py-3 text-sm"
-            >
-              <p className="text-zinc-600 dark:text-zinc-300">
-                You will receive approximately{" "}
-                <span className="font-mono font-semibold text-orange-700 dark:text-orange-300">
-                  {estimatedTokens} USDC
-                </span>
-              </p>
-              <p className="text-xs text-zinc-400 dark:text-zinc-500 mt-0.5">
-                Formula: floor({shares} × totalAssets / totalShares)
-              </p>
-            </div>
-          )}
+          {/* Real-time redemption preview (#884) */}
+          <RedemptionPreview
+            sharesInput={shares}
+            shareSymbol={shareSymbol}
+          />
 
           <button
             type="button"
