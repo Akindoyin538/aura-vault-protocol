@@ -17,6 +17,7 @@ resource "aws_lb" "main" {
   
   tags = {
     Name = "${var.project_name}-alb-${var.environment}"
+    Component = "networking"
   }
 }
 
@@ -41,6 +42,7 @@ resource "aws_lb_target_group" "backend" {
   
   tags = {
     Name = "${var.project_name}-backend-tg-${var.environment}"
+    Component = "backend"
   }
 }
 

@@ -18,6 +18,7 @@ on:
       - 'backend/**'
       - 'frontend/**'
       - 'aura-vault/**'
+      - '.trivyignore'
   schedule:
     # Run weekly on Sunday at 02:00 UTC to catch newly published CVEs
     - cron: '0 2 * * 0'

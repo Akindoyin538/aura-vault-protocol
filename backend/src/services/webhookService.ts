@@ -263,7 +263,7 @@ async function attemptDelivery(
   }
 
   // Schedule next retry with exponential backoff
-  const delayMs = BACKOFF_MS[newAttempts] ?? BACKOFF_MS[BACKOFF_MS.length - 1]!;
+  const delayMs = BACKOFF_MS[newAttempts - 1] ?? BACKOFF_MS[BACKOFF_MS.length - 1]!;
   const nextRetry = new Date(Date.now() + delayMs).toISOString();
 
   await pool.query(
