@@ -1,5 +1,11 @@
 # Multi-Vault Deployment Architecture
 
+> **Implementation status:** The repository currently deploys independent
+> `AuraVault` instances through the Stellar CLI and deployment automation. It
+> does not contain an on-chain Soroban vault factory. The EVM-side strategy and
+> access-control components described below are separate integrations and are
+> not deployed by `aura-factory/` in this repository.
+
 This document describes how multiple Aura Vault instances are deployed, how the supporting contracts interact, how the backend routes requests across vaults, and how the frontend presents vault selection to users.
 
 ---
