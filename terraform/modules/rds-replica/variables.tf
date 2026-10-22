@@ -19,6 +19,24 @@ variable "primary_instance_id" {
   }
 }
 
+variable "primary_instance_arn" {
+  description = "Optional ARN of a source DB instance in another AWS region. When set, the module creates a cross-region replica from this ARN."
+  type        = string
+  default     = ""
+}
+
+variable "primary_instance_class" {
+  description = "Source DB instance class used when primary_instance_arn is set and instance_class is empty."
+  type        = string
+  default     = "db.t3.medium"
+}
+
+variable "kms_key_id" {
+  description = "Destination-region KMS key ARN or ID for an encrypted cross-region replica."
+  type        = string
+  default     = ""
+}
+
 variable "environment" {
   description = "Deployment environment name: dev | staging | prod. Used in resource names and tags."
   type        = string

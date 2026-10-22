@@ -156,6 +156,18 @@ variable "enable_dns_failover" {
   default     = true
 }
 
+variable "dr_alb_dns_name" {
+  description = "Public DNS name of the healthy application ALB deployed in the disaster-recovery region. Failover DNS stays disabled until configured."
+  type        = string
+  default     = ""
+}
+
+variable "dr_alb_zone_id" {
+  description = "Route53 hosted-zone ID for the disaster-recovery ALB. Required together with dr_alb_dns_name to enable API failover records."
+  type        = string
+  default     = ""
+}
+
 variable "enable_email_forwarding" {
   description = "Enable email forwarding with SES"
   type        = bool
