@@ -33,10 +33,15 @@ const nextConfig: NextConfig = {
           { key: "Cache-Control", value: "public, max-age=31536000, immutable" },
         ],
       },
+      {
         // Short cache for HTML pages
         source: "/:path*",
+        headers: [
           { key: "Cache-Control", value: "public, max-age=0, must-revalidate" },
+        ],
+      },
     ];
+  },
   // next-intl's plugin uses experimental.turbo (Next.js <15 key) which is
   // rejected by Next.js 16. We manually wire the alias under the top-level
   // `turbopack` key that Next.js 16 requires.
@@ -47,9 +52,9 @@ const nextConfig: NextConfig = {
   },
 };
 
-export default withNextIntl(nextConfig);
-export default withBundleAnalyzer(nextConfig);
-export default withSentryConfig(nextConfig, {
+const configuredNext = withBundleAnalyzer(withNextIntl(nextConfig));
+
+export default withSentryConfig(configuredNext, {
   // Organisation and project are read from SENTRY_ORG and SENTRY_PROJECT env vars
   // or can be set explicitly here.
   silent: true,
