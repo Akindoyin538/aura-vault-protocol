@@ -6,6 +6,7 @@ import { usePathname } from "next/navigation";
 // ─── Nav link definitions ──────────────────────────────────────────────────
 const NAV_LINKS = [
   { label: "Dashboard", href: "/dashboard" },
+  { label: "Leaderboard", href: "/leaderboard" },
   { label: "Portfolio", href: "/portfolio" },
   { label: "Docs", href: "https://docs.aura.finance", external: true },
 ] as const;
