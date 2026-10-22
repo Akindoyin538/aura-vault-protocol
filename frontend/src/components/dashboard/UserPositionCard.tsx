@@ -4,6 +4,7 @@ import React from "react";
 import { DashboardCard } from "./DashboardCard";
 import { ShareBalanceDisplay } from "@/components/ShareBalanceDisplay";
 import { ExplorerMenu } from "@/components/ExplorerMenu";
+import HelpTooltip from "@/components/HelpTooltip";
 
 export interface UserPosition {
   /** Underlying token balance redeemable by this user */
@@ -33,7 +34,7 @@ function Skeleton({ className }: { className?: string }) {
   );
 }
 
-function Row({ label, value, testId }: { label: string; value: React.ReactNode; testId?: string }) {
+function Row({ label, value, testId }: { label: React.ReactNode; value: React.ReactNode; testId?: string }) {
   return (
     <div className="flex items-baseline justify-between gap-4">
       <dt className="text-[length:var(--text-sm)] text-[var(--color-text-muted)] shrink-0">{label}</dt>
@@ -89,7 +90,7 @@ export function UserPositionCard({ position, isLoading }: UserPositionCardProps)
           />
           <hr className="border-[var(--color-border)]" />
           <Row
-            label="Vault shares held"
+            label={<span className="inline-flex items-center gap-1">Vault shares held<HelpTooltip helpKey="vaultShares" side="left" /></span>}
             value={
               <ShareBalanceDisplay
                 shares={position!.shares}
@@ -101,7 +102,7 @@ export function UserPositionCard({ position, isLoading }: UserPositionCardProps)
             testId="position-shares"
           />
           <Row
-            label="At share price"
+            label={<span className="inline-flex items-center gap-1">At share price<HelpTooltip helpKey="exchangeRate" side="left" /></span>}
             value={position!.sharePrice}
             testId="position-share-price"
           />
