@@ -159,6 +159,12 @@ pub trait AuraVaultTrait {
     /// - [`VaultError::MathOverflow`] — arithmetic overflow.
     fn harvest(env: Env, caller: Address, yield_amount: i128) -> Result<(), VaultError>;
 
+    /// Configure the global linear yield vesting period in ledgers (default: 120,960).
+    fn set_yield_vesting_period(env: Env, admin: Address, ledgers: u32) -> Result<(), VaultError>;
+
+    /// Return the global linear yield vesting period in ledgers.
+    fn get_yield_vesting_period(env: Env) -> u32;
+
     /// Distribute underlying-token yield proportionally to all shareholders via
     /// the cumulative yield-per-share accumulator.
     fn distribute_yield(env: Env, caller: Address, yield_amount: i128) -> Result<(), VaultError>;

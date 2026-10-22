@@ -101,6 +101,12 @@ pub enum DataKey {
     PendingAdmin,
     /// Unix timestamp at which a pending admin transfer expires.
     PendingAdminExpiry,
+    /// Yield amount currently subject to linear vesting, in underlying units.
+    YieldVestingPending,
+    /// Ledger at which the current vesting interval began.
+    YieldVestingStart,
+    /// Vesting interval length, in ledgers.
+    YieldVestingPeriod,
 }
 
 pub const ADMIN_ROLE: u32 = 1 << 0;
@@ -108,6 +114,7 @@ pub const KEEPER_ROLE: u32 = 1 << 1;
 pub const GUARDIAN_ROLE: u32 = 1 << 2;
 
 pub const DAY_IN_LEDGERS: u32 = 17_280;
+pub const DEFAULT_YIELD_VESTING_PERIOD: u32 = DAY_IN_LEDGERS * 7;
 pub const INSTANCE_LIFETIME_THRESHOLD: u32 = DAY_IN_LEDGERS * 7;
 pub const INSTANCE_BUMP_AMOUNT: u32 = DAY_IN_LEDGERS * 30;
 pub const PERSISTENT_LIFETIME_THRESHOLD: u32 = DAY_IN_LEDGERS * 7;
@@ -151,6 +158,54 @@ pub fn get_total_deposited(env: &Env) -> i128 {
 
 pub fn set_total_deposited(env: &Env, val: i128) {
     env.storage().instance().set(&DataKey::TotalDeposited, &val);
+}
+
+pub fn get_yield_vesting_pending(env: &Env) -> i128 {
+    env.storage().instance().get(&DataKey::YieldVestingPending).unwrap_or(0)
+}
+
+pub fn set_yield_vesting_pending(env: &Env, amount: i128) {
+    env.storage().instance().set(&DataKey::YieldVestingPending, &amount);
+}
+
+pub fn get_yield_vesting_start(env: &Env) -> u32 {
+    env.storage().instance().get(&DataKey::YieldVestingStart).unwrap_or(0)
+}
+
+pub fn set_yield_vesting_start(env: &Env, ledger: u32) {
+    env.storage().instance().set(&DataKey::YieldVestingStart, &ledger);
+}
+
+pub fn get_yield_vesting_period(env: &Env) -> u32 {
+    env.storage().instance().get(&DataKey::YieldVestingPeriod).unwrap_or(DEFAULT_YIELD_VESTING_PERIOD)
+}
+
+pub fn set_yield_vesting_period(env: &Env, ledgers: u32) {
+    env.storage().instance().set(&DataKey::YieldVestingPeriod, &ledgers);
+}
+
+/// Returns the portion of harvested yield that has not vested at this ledger.
+pub fn unvested_yield(env: &Env) -> i128 {
+    let pending = get_yield_vesting_pending(env);
+    let period = get_yield_vesting_period(env);
+    if pending <= 0 || period == 0 { return 0; }
+    let start = get_yield_vesting_start(env);
+    let elapsed = env.ledger().sequence().saturating_sub(start);
+    if elapsed >= period { return 0; }
+    let remaining = (period - elapsed) as i128;
+    let period = period as i128;
+    (pending / period) * remaining + ((pending % period) * remaining) / period
+}
+
+/// Add a new yield credit while preserving the currently unvested balance.
+/// The combined remainder restarts its linear schedule from the current ledger.
+pub fn schedule_yield_vesting(env: &Env, added: i128) -> Result<(), VaultError> {
+    let pending = unvested_yield(env)
+        .checked_add(added)
+        .ok_or(VaultError::MathOverflow)?;
+    set_yield_vesting_pending(env, pending);
+    set_yield_vesting_start(env, env.ledger().sequence());
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
