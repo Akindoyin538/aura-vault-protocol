@@ -95,6 +95,42 @@ pub trait AuraVaultTrait {
     /// ```
     fn deposit(env: Env, caller: Address, amount: i128) -> Result<i128, VaultError>;
 
+    /// Swap an alternate token into the configured underlying token and mint shares.
+    fn deposit_with_swap(
+        env: Env,
+        caller: Address,
+        input_token: Address,
+        input_amount: i128,
+        min_shares: i128,
+    ) -> Result<i128, VaultError>;
+
+    /// Configure the optional DEX router used by `deposit_with_swap`.
+    fn set_dex_router(env: Env, admin: Address, router: Option<Address>) -> Result<(), VaultError>;
+
+    /// Transfer shares to another address.
+    fn transfer(env: Env, from: Address, to: Address, shares: i128) -> Result<(), VaultError>;
+
+    /// Set a time-limited share allowance.
+    fn approve(
+        env: Env,
+        from: Address,
+        spender: Address,
+        shares: i128,
+        expiration_ledger: u32,
+    ) -> Result<(), VaultError>;
+
+    /// Read an unexpired share allowance.
+    fn allowance(env: Env, from: Address, spender: Address) -> i128;
+
+    /// Transfer shares using the owner's allowance.
+    fn transfer_from(
+        env: Env,
+        spender: Address,
+        from: Address,
+        to: Address,
+        shares: i128,
+    ) -> Result<(), VaultError>;
+
     /// Burn vault shares and redeem the proportional underlying tokens.
     ///
     /// Calculates the redemption amount using:
@@ -365,6 +401,18 @@ pub trait AuraVaultTrait {
     /// - `env` — Soroban execution environment.
     /// - `address` — The Stellar account address to query.
     fn balance_of(env: Env, address: Address) -> i128;
+
+    /// Enumerate all non-expired governance proposals.
+    fn get_proposals(env: Env) -> Vec<crate::ProposalView>;
+
+    /// Read one governance proposal.
+    fn get_proposal(env: Env, id: u64) -> Option<crate::ProposalView>;
+
+    /// Read the instance's stored storage layout version.
+    fn storage_layout_version(env: Env) -> u32;
+
+    /// Return error 10 when the instance layout does not match this Wasm.
+    fn validate_storage_layout_version(env: Env) -> Result<(), VaultError>;
 
     /// Upgrade the contract's Wasm binary.
     ///
