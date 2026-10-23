@@ -65,7 +65,9 @@ pub trait AuraVaultTrait {
     /// ```
     ///
     /// Enforces the flash-loan guard (actual balance == tracked balance) before
-    /// executing. Emits a `deposit` event on success.
+    /// executing. If `referrer` is `Some(addr)` and `addr != caller`, increments
+    /// the on-chain referral count for `addr` and emits a `deposit_with_referral`
+    /// event in addition to the standard `deposit` event.
     ///
     /// # Parameters
     ///
@@ -655,6 +657,20 @@ pub trait AuraVaultTrait {
 
     /// Query the minimum deposit amount. Read-only, no auth required.
     fn min_deposit(env: Env) -> i128;
+
+    // -----------------------------------------------------------------------
+    // Referral tracking
+    // -----------------------------------------------------------------------
+
+    /// Return the number of deposits attributed to `referrer`.
+    ///
+    /// This count is incremented each time a depositor supplies
+    /// `Some(referrer)` as the referrer argument to [`deposit`].  It is
+    /// intended for off-chain reward calculation; no on-chain bonus is
+    /// distributed.
+    ///
+    /// Read-only; no authorization required.
+    fn get_referral_count(env: Env, referrer: Address) -> u32;
 
     // -----------------------------------------------------------------------
     // Contract metadata (Issue #350)

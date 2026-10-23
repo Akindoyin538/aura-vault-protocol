@@ -2295,3 +2295,121 @@ fn test_emergency_withdraw_preserves_share_ratio() {
     assert_eq!(vault.total_assets(), 0);
     assert_eq!(vault.total_shares(), 0);
 }
+
+// ---------------------------------------------------------------------------
+// Referral tracking tests
+// ---------------------------------------------------------------------------
+
+/// A deposit with no referrer succeeds and does not increment any referral count.
+#[test]
+fn test_deposit_without_referrer_succeeds() {
+    let (env, vault, admin, token) = setup();
+    let user = Address::generate(&env);
+    let referrer = Address::generate(&env);
+    mint(&env, &token, &admin, &user, 1_000_000);
+
+    let shares = vault.deposit(&user, &1_000_000, &None);
+    assert_eq!(shares, 1_000_000);
+    // Referral count for a never-referred address must be zero.
+    assert_eq!(vault.get_referral_count(&referrer), 0);
+}
+
+/// A deposit with a valid referrer increments the referral count by one.
+#[test]
+fn test_deposit_with_referrer_increments_count() {
+    let (env, vault, admin, token) = setup();
+    let user = Address::generate(&env);
+    let referrer = Address::generate(&env);
+    mint(&env, &token, &admin, &user, 1_000_000);
+
+    vault.deposit(&user, &1_000_000, &Some(referrer.clone()));
+    assert_eq!(vault.get_referral_count(&referrer), 1);
+}
+
+/// Multiple deposits from different users through the same referrer accumulate correctly.
+#[test]
+fn test_multiple_depositors_same_referrer_accumulates() {
+    let (env, vault, admin, token) = setup();
+    let referrer = Address::generate(&env);
+
+    for _ in 0..3 {
+        let user = Address::generate(&env);
+        mint(&env, &token, &admin, &user, 1_000_000);
+        vault.deposit(&user, &1_000_000, &Some(referrer.clone()));
+    }
+
+    assert_eq!(vault.get_referral_count(&referrer), 3);
+}
+
+/// A deposit where referrer == depositor must revert with SelfReferral.
+#[test]
+fn test_deposit_self_referral_returns_error() {
+    let (env, vault, admin, token) = setup();
+    let user = Address::generate(&env);
+    mint(&env, &token, &admin, &user, 1_000_000);
+
+    let result = vault.try_deposit(&user, &1_000_000, &Some(user.clone()));
+    assert_eq!(result, Err(Ok(VaultError::SelfReferral)));
+}
+
+/// Self-referral check fires before any state is written (no tokens leave caller).
+#[test]
+fn test_self_referral_check_fires_before_state_change() {
+    let (env, vault, admin, token) = setup();
+    let user = Address::generate(&env);
+    mint(&env, &token, &admin, &user, 1_000_000);
+
+    let _ = vault.try_deposit(&user, &1_000_000, &Some(user.clone()));
+
+    // Vault must still be empty — no shares minted, no tokens transferred.
+    assert_eq!(vault.total_assets(), 0);
+    assert_eq!(vault.balance_of(&user), 0);
+}
+
+/// Referral count for an address that has never been used as referrer is zero.
+#[test]
+fn test_get_referral_count_unregistered_address_is_zero() {
+    let (env, vault, _admin, _token) = setup();
+    let stranger = Address::generate(&env);
+    assert_eq!(vault.get_referral_count(&stranger), 0);
+}
+
+/// The deposit event is still emitted normally when a referrer is supplied.
+#[test]
+fn test_deposit_with_referrer_still_mints_correct_shares() {
+    let (env, vault, admin, token) = setup();
+    let user = Address::generate(&env);
+    let referrer = Address::generate(&env);
+    mint(&env, &token, &admin, &user, 2_000_000);
+
+    let shares = vault.deposit(&user, &2_000_000, &Some(referrer.clone()));
+
+    // Share minting logic must be unaffected by the referrer.
+    assert_eq!(shares, 2_000_000);
+    assert_eq!(vault.balance_of(&user), 2_000_000);
+    assert_eq!(vault.total_assets(), 2_000_000);
+    // Referral count must be exactly one.
+    assert_eq!(vault.get_referral_count(&referrer), 1);
+}
+
+/// Different referrers each maintain independent counts.
+#[test]
+fn test_different_referrers_have_independent_counts() {
+    let (env, vault, admin, token) = setup();
+    let referrer_a = Address::generate(&env);
+    let referrer_b = Address::generate(&env);
+
+    let user1 = Address::generate(&env);
+    let user2 = Address::generate(&env);
+    let user3 = Address::generate(&env);
+    mint(&env, &token, &admin, &user1, 1_000_000);
+    mint(&env, &token, &admin, &user2, 1_000_000);
+    mint(&env, &token, &admin, &user3, 1_000_000);
+
+    vault.deposit(&user1, &1_000_000, &Some(referrer_a.clone()));
+    vault.deposit(&user2, &1_000_000, &Some(referrer_a.clone()));
+    vault.deposit(&user3, &1_000_000, &Some(referrer_b.clone()));
+
+    assert_eq!(vault.get_referral_count(&referrer_a), 2);
+    assert_eq!(vault.get_referral_count(&referrer_b), 1);
+}
