@@ -2,6 +2,7 @@ target/
 Cargo.lock
 .DS_Store
 *.wasm
+mutants.out/
 
 *storybook.log
 storybook-static

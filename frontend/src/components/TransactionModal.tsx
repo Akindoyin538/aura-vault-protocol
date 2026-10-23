@@ -677,7 +677,7 @@ export default function TransactionModal({
                 <div data-cy="modal-success" className="flex flex-col items-center gap-4 w-full">
                   <CheckCircle
                     size={52}
-                    className="text-emerald-600 dark:text-emerald-400"
+                    className="animate-success-check text-emerald-600 dark:text-emerald-400"
                     aria-hidden="true"
                   />
                   <p className="font-semibold text-zinc-900 dark:text-zinc-50 text-lg">

@@ -96,6 +96,42 @@ pub trait AuraVaultTrait {
     /// ```
     fn deposit(env: Env, caller: Address, amount: i128) -> Result<i128, VaultError>;
 
+    /// Swap an alternate token into the configured underlying token and mint shares.
+    fn deposit_with_swap(
+        env: Env,
+        caller: Address,
+        input_token: Address,
+        input_amount: i128,
+        min_shares: i128,
+    ) -> Result<i128, VaultError>;
+
+    /// Configure the optional DEX router used by `deposit_with_swap`.
+    fn set_dex_router(env: Env, admin: Address, router: Option<Address>) -> Result<(), VaultError>;
+
+    /// Transfer shares to another address.
+    fn transfer(env: Env, from: Address, to: Address, shares: i128) -> Result<(), VaultError>;
+
+    /// Set a time-limited share allowance.
+    fn approve(
+        env: Env,
+        from: Address,
+        spender: Address,
+        shares: i128,
+        expiration_ledger: u32,
+    ) -> Result<(), VaultError>;
+
+    /// Read an unexpired share allowance.
+    fn allowance(env: Env, from: Address, spender: Address) -> i128;
+
+    /// Transfer shares using the owner's allowance.
+    fn transfer_from(
+        env: Env,
+        spender: Address,
+        from: Address,
+        to: Address,
+        shares: i128,
+    ) -> Result<(), VaultError>;
+
     /// Burn vault shares and redeem the proportional underlying tokens.
     ///
     /// Calculates the redemption amount using:
@@ -159,6 +195,12 @@ pub trait AuraVaultTrait {
     /// - [`VaultError::BalanceMismatch`] — flash-loan guard tripped.
     /// - [`VaultError::MathOverflow`] — arithmetic overflow.
     fn harvest(env: Env, caller: Address, yield_amount: i128) -> Result<(), VaultError>;
+
+    /// Configure the global linear yield vesting period in ledgers (default: 120,960).
+    fn set_yield_vesting_period(env: Env, admin: Address, ledgers: u32) -> Result<(), VaultError>;
+
+    /// Return the global linear yield vesting period in ledgers.
+    fn get_yield_vesting_period(env: Env) -> u32;
 
     /// Distribute underlying-token yield proportionally to all shareholders via
     /// the cumulative yield-per-share accumulator.
@@ -367,6 +409,18 @@ pub trait AuraVaultTrait {
     /// - `address` — The Stellar account address to query.
     fn balance_of(env: Env, address: Address) -> i128;
 
+    /// Enumerate all non-expired governance proposals.
+    fn get_proposals(env: Env) -> Vec<crate::ProposalView>;
+
+    /// Read one governance proposal.
+    fn get_proposal(env: Env, id: u64) -> Option<crate::ProposalView>;
+
+    /// Read the instance's stored storage layout version.
+    fn storage_layout_version(env: Env) -> u32;
+
+    /// Return error 10 when the instance layout does not match this Wasm.
+    fn validate_storage_layout_version(env: Env) -> Result<(), VaultError>;
+
     /// Upgrade the contract's Wasm binary.
     ///
     /// Admin-only. Increments the contract version, replaces the on-chain Wasm
@@ -527,6 +581,18 @@ pub trait AuraVaultTrait {
 
     /// Query whether an address is whitelisted. Read-only, no auth required.
     fn is_whitelisted(env: Env, addr: Address) -> bool;
+
+    /// Add a depositor to the KYC allowlist. Admin-only.
+    fn add_to_allowlist(env: Env, admin: Address, address: Address) -> Result<(), VaultError>;
+
+    /// Remove a depositor from the KYC allowlist. Admin-only.
+    fn remove_from_allowlist(env: Env, admin: Address, address: Address) -> Result<(), VaultError>;
+
+    /// Query KYC allowlist membership. Read-only, no auth required.
+    fn is_allowlisted(env: Env, address: Address) -> bool;
+
+    /// Returns whether governance has enabled KYC allowlist enforcement.
+    fn allowlist_enabled(env: Env) -> bool;
 
     // -----------------------------------------------------------------------
     // Minimum deposit amount (Issue #355)
