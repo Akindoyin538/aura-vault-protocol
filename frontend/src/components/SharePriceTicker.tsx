@@ -1,7 +1,8 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from "react";
-import { TrendingUp, TrendingDown, Minus } from "lucide-react";
+import { TrendingUp, TrendingDown, Minus, Bell } from "lucide-react";
+import SharePriceAlertModal from "./SharePriceAlertModal";
 
 const POLL_INTERVAL_MS = 30_000;
 
@@ -40,6 +41,7 @@ export function SharePriceTicker() {
   const [prevPrice, setPrevPrice] = useState<number | null>(null);
   const [animating, setAnimating] = useState(false);
   const [tooltipVisible, setTooltipVisible] = useState(false);
+  const [alertModalOpen, setAlertModalOpen] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -218,6 +220,22 @@ export function SharePriceTicker() {
           {formatChange(data.change24h)}
         </span>
       </button>
+
+      <button
+        type="button"
+        onClick={() => setAlertModalOpen(true)}
+        aria-label="Set share price alerts"
+        title="Set share price alerts"
+        className="p-1 rounded text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500"
+      >
+        <Bell size={14} aria-hidden="true" />
+      </button>
+
+      <SharePriceAlertModal
+        isOpen={alertModalOpen}
+        onClose={() => setAlertModalOpen(false)}
+        currentPrice={data.price}
+      />
     </div>
   );
 }

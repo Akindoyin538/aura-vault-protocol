@@ -18,6 +18,7 @@ Thanks for helping improve Aura Vault Protocol. This guide explains how to repor
    - [How to Propose New Error Variants](#how-to-propose-new-error-variants)
 5. [Commit Message Conventions](#commit-message-conventions)
 6. [Review Process](#review-process)
+7. [Changelog Entries](#changelog-entries)
 
 ---
 
@@ -50,6 +51,15 @@ Use the feature request template when you want to propose a new capability, work
 4. Ensure all linters and formatting checks pass.
 5. Open a pull request using the repository template.
 6. The target maintainer review SLA is **2 business days**.
+
+### Changelog Entries
+
+Every pull request that changes `backend/` or `frontend/` must add a concise
+entry under `## [Unreleased]` in `CHANGELOG.md`, using one of the Keep a
+Changelog headings (`Added`, `Changed`, `Deprecated`, `Removed`, `Fixed`, or
+`Security`). A GitHub Actions check enforces this for those code paths. Contract,
+documentation, and tooling-only changes should also update the changelog when
+they affect integrators or release behavior.
 
 ### Pull Request Checklist
 

@@ -59,6 +59,8 @@ export interface PreSignBreakdownProps {
   sharePrice?: string;
   /** Protocol fee rate as a decimal (e.g. 0.001 = 0.1%). */
   protocolFeeRate?: number;
+  /** Estimated transaction time label (default "5–7 seconds"). */
+  estimatedTimeSec?: string;
   /** Called when user clicks Cancel / Back. */
   onCancel: () => void;
   /** Called when user clicks Confirm / Proceed. */
@@ -71,6 +73,7 @@ export interface PreSignBreakdownProps {
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "";
 const FEE_STATS_URL = `${API_BASE}/api/v1/stellar/fee-stats`;
+const GAS_ESTIMATE_URL = `${API_BASE}/api/v1/gas/estimate`;
 
 /** XLM spot price used to convert fees to USD (stub — replace with live feed). */
 const XLM_USD_PRICE = 0.12;
@@ -203,6 +206,7 @@ export default function PreSignBreakdown({
   amount,
   sharePrice = "1.0",
   protocolFeeRate = 0,
+  estimatedTimeSec = "5–7",
   onCancel,
   onProceed,
 }: PreSignBreakdownProps) {
@@ -210,13 +214,49 @@ export default function PreSignBreakdown({
   const [feeLoading, setFeeLoading] = useState(true);
   const [feeError, setFeeError] = useState(false);
 
-  // Fetch fee stats from backend
+  // Fetch fee stats from backend — try /api/v1/gas/estimate first (#885), then
+  // fall back to /api/v1/stellar/fee-stats for the full Stellar fee stats shape.
   useEffect(() => {
     let cancelled = false;
     setFeeLoading(true);
     setFeeError(false);
 
     (async () => {
+      try {
+        // Primary: /api/v1/gas/estimate (returns baseFee in stroops + XLM)
+        const gasRes = await fetch(GAS_ESTIMATE_URL);
+        if (gasRes.ok) {
+          const gasJson = await gasRes.json();
+          const gasData = gasJson.data ?? gasJson;
+          // Normalize to StellarFeeStats shape so the existing Row components work
+          const baseFeeStroops: number =
+            gasData.baseFeeStroops ?? gasData.baseFee ?? 100;
+          const baseFeeXlm: string =
+            gasData.xlm ?? (baseFeeStroops / 10_000_000).toFixed(7);
+          if (!cancelled) {
+            setFeeStats({
+              lastLedger: gasData.lastLedger ?? 0,
+              lastLedgerBaseFee: baseFeeStroops,
+              ledgerCapacityUsage: gasData.ledgerCapacityUsage ?? 0,
+              congested: gasData.congested ?? false,
+              fee: {
+                base: { stroops: baseFeeStroops, xlm: baseFeeXlm },
+                low: { stroops: baseFeeStroops, xlm: baseFeeXlm },
+                standard: { stroops: baseFeeStroops, xlm: baseFeeXlm },
+                high: { stroops: baseFeeStroops * 2, xlm: (baseFeeStroops * 2 / 10_000_000).toFixed(7) },
+              },
+              fetchedAt: new Date().toISOString(),
+              cached: gasData.cached ?? false,
+            });
+          }
+          if (!cancelled) setFeeLoading(false);
+          return;
+        }
+      } catch {
+        // fall through to stellar fee-stats
+      }
+
+      // Fallback: /api/v1/stellar/fee-stats
       try {
         const res = await fetch(FEE_STATS_URL);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -289,6 +329,15 @@ export default function PreSignBreakdown({
           bold
           testId="breakdown-network-fee"
         />
+
+        <div className="border-t border-zinc-200 dark:border-zinc-700 my-1" />
+
+        {/* Estimated confirmation time (#885) */}
+        <Row
+          label="Estimated time"
+          value={`~${estimatedTimeSec} seconds`}
+          testId="breakdown-estimated-time"
+        />
       </dl>
 
       {/* Network congestion warning */}
@@ -340,7 +389,7 @@ export default function PreSignBreakdown({
               Loading…
             </span>
           ) : (
-            "Proceed to sign"
+            "Confirm & Sign"
           )}
         </button>
       </div>

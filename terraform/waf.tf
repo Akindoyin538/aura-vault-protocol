@@ -28,7 +28,7 @@ resource "aws_cloudwatch_log_group" "waf" {
 
   tags = {
     Name        = "${var.project_name}-waf-logs-${var.environment}"
-    Environment = var.environment
+    Environment = local.cost_environment
     ManagedBy   = "terraform"
   }
 }
@@ -242,7 +242,7 @@ resource "aws_wafv2_web_acl" "cloudfront_api" {
 
   tags = {
     Name        = "${var.project_name}-cloudfront-waf-${var.environment}"
-    Environment = var.environment
+    Environment = local.cost_environment
     ManagedBy   = "terraform"
   }
 }
@@ -315,7 +315,7 @@ resource "aws_cloudwatch_metric_alarm" "waf_auth_rate_limit_high" {
 
   tags = {
     Name        = "${var.project_name}-waf-auth-alarm-${var.environment}"
-    Environment = var.environment
+    Environment = local.cost_environment
   }
 }
 
@@ -342,7 +342,7 @@ resource "aws_cloudwatch_metric_alarm" "waf_api_rate_limit_high" {
 
   tags = {
     Name        = "${var.project_name}-waf-api-alarm-${var.environment}"
-    Environment = var.environment
+    Environment = local.cost_environment
   }
 }
 

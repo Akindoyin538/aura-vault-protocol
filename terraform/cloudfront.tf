@@ -4,6 +4,7 @@ resource "aws_s3_bucket" "static_assets" {
   
   tags = {
     Name = "${var.project_name}-static-assets-${var.environment}"
+    Component = "frontend"
   }
 }
 
@@ -167,6 +168,7 @@ resource "aws_cloudfront_distribution" "main" {
   
   tags = {
     Name = "${var.project_name}-cloudfront-${var.environment}"
+    Component = "frontend"
   }
 }
 
