@@ -1,8 +1,9 @@
-use soroban_sdk::{contracttype, Address, Env, Vec};
 use crate::errors::VaultError;
+use soroban_sdk::{contracttype, Address, Env, Vec};
 
 #[contracttype]
 pub enum DataKey {
+    Initialized,
     Admin,
     UnderlyingToken,
     TotalShares,
@@ -104,10 +105,20 @@ pub enum DataKey {
     MultiSigVote(u64, Address),
     /// Per-address role bitmask used by admin/keeper/guardian checks.
     Role(Address),
+    /// SEP-41 share allowance and its expiration ledger.
+    ShareAllowance(Address, Address),
+    /// Optional contract address implementing the configured DEX router API.
+    DexRouter,
     /// Pending admin nominated for a two-step transfer.
     PendingAdmin,
     /// Unix timestamp at which a pending admin transfer expires.
     PendingAdminExpiry,
+    /// Yield amount currently subject to linear vesting, in underlying units.
+    YieldVestingPending,
+    /// Ledger at which the current vesting interval began.
+    YieldVestingStart,
+    /// Vesting interval length, in ledgers.
+    YieldVestingPeriod,
 }
 
 pub const ADMIN_ROLE: u32 = 1 << 0;
@@ -115,6 +126,7 @@ pub const KEEPER_ROLE: u32 = 1 << 1;
 pub const GUARDIAN_ROLE: u32 = 1 << 2;
 
 pub const DAY_IN_LEDGERS: u32 = 17_280;
+pub const DEFAULT_YIELD_VESTING_PERIOD: u32 = DAY_IN_LEDGERS * 7;
 pub const INSTANCE_LIFETIME_THRESHOLD: u32 = DAY_IN_LEDGERS * 7;
 pub const INSTANCE_BUMP_AMOUNT: u32 = DAY_IN_LEDGERS * 30;
 pub const PERSISTENT_LIFETIME_THRESHOLD: u32 = DAY_IN_LEDGERS * 7;
@@ -125,7 +137,13 @@ pub const PERSISTENT_BUMP_AMOUNT: u32 = DAY_IN_LEDGERS * 30;
 // ---------------------------------------------------------------------------
 
 pub fn is_initialized(env: &Env) -> bool {
-    env.storage().instance().has(&DataKey::UnderlyingToken)
+    env.storage().instance().has(&DataKey::Initialized)
+        || env.storage().instance().has(&DataKey::UnderlyingToken)
+        || env.storage().instance().has(&DataKey::Admin)
+}
+
+pub fn set_initialized(env: &Env) {
+    env.storage().instance().set(&DataKey::Initialized, &true);
 }
 
 pub fn get_admin(env: &Env) -> Option<Address> {
@@ -141,11 +159,28 @@ pub fn get_token(env: &Env) -> Option<Address> {
 }
 
 pub fn set_token(env: &Env, token: &Address) {
-    env.storage().instance().set(&DataKey::UnderlyingToken, token);
+    env.storage()
+        .instance()
+        .set(&DataKey::UnderlyingToken, token);
+}
+
+pub fn get_dex_router(env: &Env) -> Option<Address> {
+    env.storage().instance().get(&DataKey::DexRouter)
+}
+
+pub fn set_dex_router(env: &Env, router: Option<&Address>) {
+    if let Some(address) = router {
+        env.storage().instance().set(&DataKey::DexRouter, address);
+    } else {
+        env.storage().instance().remove(&DataKey::DexRouter);
+    }
 }
 
 pub fn get_total_shares(env: &Env) -> i128 {
-    env.storage().instance().get(&DataKey::TotalShares).unwrap_or(0)
+    env.storage()
+        .instance()
+        .get(&DataKey::TotalShares)
+        .unwrap_or(0)
 }
 
 pub fn set_total_shares(env: &Env, val: i128) {
@@ -153,11 +188,62 @@ pub fn set_total_shares(env: &Env, val: i128) {
 }
 
 pub fn get_total_deposited(env: &Env) -> i128 {
-    env.storage().instance().get(&DataKey::TotalDeposited).unwrap_or(0)
+    env.storage()
+        .instance()
+        .get(&DataKey::TotalDeposited)
+        .unwrap_or(0)
 }
 
 pub fn set_total_deposited(env: &Env, val: i128) {
     env.storage().instance().set(&DataKey::TotalDeposited, &val);
+}
+
+pub fn get_yield_vesting_pending(env: &Env) -> i128 {
+    env.storage().instance().get(&DataKey::YieldVestingPending).unwrap_or(0)
+}
+
+pub fn set_yield_vesting_pending(env: &Env, amount: i128) {
+    env.storage().instance().set(&DataKey::YieldVestingPending, &amount);
+}
+
+pub fn get_yield_vesting_start(env: &Env) -> u32 {
+    env.storage().instance().get(&DataKey::YieldVestingStart).unwrap_or(0)
+}
+
+pub fn set_yield_vesting_start(env: &Env, ledger: u32) {
+    env.storage().instance().set(&DataKey::YieldVestingStart, &ledger);
+}
+
+pub fn get_yield_vesting_period(env: &Env) -> u32 {
+    env.storage().instance().get(&DataKey::YieldVestingPeriod).unwrap_or(DEFAULT_YIELD_VESTING_PERIOD)
+}
+
+pub fn set_yield_vesting_period(env: &Env, ledgers: u32) {
+    env.storage().instance().set(&DataKey::YieldVestingPeriod, &ledgers);
+}
+
+/// Returns the portion of harvested yield that has not vested at this ledger.
+pub fn unvested_yield(env: &Env) -> i128 {
+    let pending = get_yield_vesting_pending(env);
+    let period = get_yield_vesting_period(env);
+    if pending <= 0 || period == 0 { return 0; }
+    let start = get_yield_vesting_start(env);
+    let elapsed = env.ledger().sequence().saturating_sub(start);
+    if elapsed >= period { return 0; }
+    let remaining = (period - elapsed) as i128;
+    let period = period as i128;
+    (pending / period) * remaining + ((pending % period) * remaining) / period
+}
+
+/// Add a new yield credit while preserving the currently unvested balance.
+/// The combined remainder restarts its linear schedule from the current ledger.
+pub fn schedule_yield_vesting(env: &Env, added: i128) -> Result<(), VaultError> {
+    let pending = unvested_yield(env)
+        .checked_add(added)
+        .ok_or(VaultError::MathOverflow)?;
+    set_yield_vesting_pending(env, pending);
+    set_yield_vesting_start(env, env.ledger().sequence());
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -177,6 +263,38 @@ pub fn set_balance(env: &Env, addr: &Address, val: i128) {
         .set(&DataKey::Balance(addr.clone()), &val);
 }
 
+pub fn get_share_allowance(env: &Env, owner: &Address, spender: &Address) -> i128 {
+    get_share_allowance_details(env, owner, spender).map(|(amount, _)| amount).unwrap_or(0)
+}
+
+pub fn get_share_allowance_details(
+    env: &Env,
+    owner: &Address,
+    spender: &Address,
+) -> Option<(i128, u32)> {
+    let key = DataKey::ShareAllowance(owner.clone(), spender.clone());
+    match env.storage().persistent().get::<_, (i128, u32)>(&key) {
+        value @ Some((_, expiration)) if env.ledger().sequence() <= expiration => value,
+        _ => None,
+    }
+}
+
+pub fn set_share_allowance(
+    env: &Env,
+    owner: &Address,
+    spender: &Address,
+    amount: i128,
+    expiration: u32,
+) {
+    let key = DataKey::ShareAllowance(owner.clone(), spender.clone());
+    env.storage().persistent().set(&key, &(amount, expiration));
+    env.storage().persistent().extend_ttl(
+        &key,
+        PERSISTENT_LIFETIME_THRESHOLD,
+        PERSISTENT_BUMP_AMOUNT,
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Fee storage helpers (instance storage)
 // ---------------------------------------------------------------------------
@@ -190,7 +308,10 @@ pub fn set_treasury(env: &Env, treasury: &Address) {
 }
 
 pub fn get_perf_fee_bps(env: &Env) -> u32 {
-    env.storage().instance().get(&DataKey::PerfFeeBps).unwrap_or(1000)
+    env.storage()
+        .instance()
+        .get(&DataKey::PerfFeeBps)
+        .unwrap_or(1000)
 }
 
 pub fn set_perf_fee_bps(env: &Env, bps: u32) {
@@ -198,7 +319,10 @@ pub fn set_perf_fee_bps(env: &Env, bps: u32) {
 }
 
 pub fn get_mgmt_fee_bps(env: &Env) -> u32 {
-    env.storage().instance().get(&DataKey::MgmtFeeBps).unwrap_or(0)
+    env.storage()
+        .instance()
+        .get(&DataKey::MgmtFeeBps)
+        .unwrap_or(0)
 }
 
 pub fn set_mgmt_fee_bps(env: &Env, bps: u32) {
@@ -206,19 +330,29 @@ pub fn set_mgmt_fee_bps(env: &Env, bps: u32) {
 }
 
 pub fn get_total_fee_collected(env: &Env) -> i128 {
-    env.storage().instance().get(&DataKey::TotalFeeCollected).unwrap_or(0)
+    env.storage()
+        .instance()
+        .get(&DataKey::TotalFeeCollected)
+        .unwrap_or(0)
 }
 
 pub fn set_total_fee_collected(env: &Env, val: i128) {
-    env.storage().instance().set(&DataKey::TotalFeeCollected, &val);
+    env.storage()
+        .instance()
+        .set(&DataKey::TotalFeeCollected, &val);
 }
 
 pub fn get_last_mgmt_fee_time(env: &Env) -> u64 {
-    env.storage().instance().get(&DataKey::LastMgmtFeeTime).unwrap_or(0)
+    env.storage()
+        .instance()
+        .get(&DataKey::LastMgmtFeeTime)
+        .unwrap_or(0)
 }
 
 pub fn set_last_mgmt_fee_time(env: &Env, time: u64) {
-    env.storage().instance().set(&DataKey::LastMgmtFeeTime, &time);
+    env.storage()
+        .instance()
+        .set(&DataKey::LastMgmtFeeTime, &time);
 }
 
 // ---------------------------------------------------------------------------
@@ -249,13 +383,11 @@ pub fn bump_instance(env: &Env) {
 }
 
 pub fn bump_persistent(env: &Env, addr: &Address) {
-    env.storage()
-        .persistent()
-        .extend_ttl(
-            &DataKey::Balance(addr.clone()),
-            PERSISTENT_LIFETIME_THRESHOLD,
-            PERSISTENT_BUMP_AMOUNT,
-        );
+    env.storage().persistent().extend_ttl(
+        &DataKey::Balance(addr.clone()),
+        PERSISTENT_LIFETIME_THRESHOLD,
+        PERSISTENT_BUMP_AMOUNT,
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -290,7 +422,10 @@ pub fn set_layout_version(env: &Env, v: u32) {
 // ---------------------------------------------------------------------------
 
 pub fn is_paused(env: &Env) -> bool {
-    env.storage().instance().get(&DataKey::Paused).unwrap_or(false)
+    env.storage()
+        .instance()
+        .get(&DataKey::Paused)
+        .unwrap_or(false)
 }
 
 pub fn set_paused(env: &Env, paused: bool) {
@@ -316,7 +451,10 @@ pub fn set_tvl_cap(env: &Env, cap: i128) {
 
 /// Timestamp (ledger unix seconds) of the last successful harvest. 0 = never.
 pub fn get_last_harvest_time(env: &Env) -> u64 {
-    env.storage().instance().get(&DataKey::LastHarvestTime).unwrap_or(0)
+    env.storage()
+        .instance()
+        .get(&DataKey::LastHarvestTime)
+        .unwrap_or(0)
 }
 
 pub fn set_last_harvest_time(env: &Env, ts: u64) {
@@ -325,11 +463,16 @@ pub fn set_last_harvest_time(env: &Env, ts: u64) {
 
 /// Minimum seconds that must elapse between harvests. 0 = no cooldown.
 pub fn get_harvest_cooldown_secs(env: &Env) -> u64 {
-    env.storage().instance().get(&DataKey::HarvestCooldownSecs).unwrap_or(0)
+    env.storage()
+        .instance()
+        .get(&DataKey::HarvestCooldownSecs)
+        .unwrap_or(0)
 }
 
 pub fn set_harvest_cooldown_secs(env: &Env, secs: u64) {
-    env.storage().instance().set(&DataKey::HarvestCooldownSecs, &secs);
+    env.storage()
+        .instance()
+        .set(&DataKey::HarvestCooldownSecs, &secs);
 }
 
 // ---------------------------------------------------------------------------
@@ -338,7 +481,10 @@ pub fn set_harvest_cooldown_secs(env: &Env, secs: u64) {
 
 /// Global cumulative yield-per-share (YPS), scaled by YIELD_PRECISION.
 pub fn get_cumulative_yps(env: &Env) -> i128 {
-    env.storage().instance().get(&DataKey::CumulativeYps).unwrap_or(0)
+    env.storage()
+        .instance()
+        .get(&DataKey::CumulativeYps)
+        .unwrap_or(0)
 }
 
 pub fn set_cumulative_yps(env: &Env, val: i128) {
@@ -375,11 +521,16 @@ pub fn set_user_pending_yield(env: &Env, addr: &Address, val: i128) {
 
 /// Global distribution epoch counter.
 pub fn get_distribution_epoch(env: &Env) -> u64 {
-    env.storage().instance().get(&DataKey::DistributionEpoch).unwrap_or(0)
+    env.storage()
+        .instance()
+        .get(&DataKey::DistributionEpoch)
+        .unwrap_or(0)
 }
 
 pub fn set_distribution_epoch(env: &Env, epoch: u64) {
-    env.storage().instance().set(&DataKey::DistributionEpoch, &epoch);
+    env.storage()
+        .instance()
+        .set(&DataKey::DistributionEpoch, &epoch);
 }
 
 /// TTL bump for per-user yield checkpoint and pending entries.
@@ -387,11 +538,19 @@ pub fn bump_user_yield_ttl(env: &Env, addr: &Address) {
     // Bump both entries if they exist; silently skip if not yet set.
     let ck = DataKey::UserCheckpoint(addr.clone());
     if env.storage().persistent().has(&ck) {
-        env.storage().persistent().extend_ttl(&ck, PERSISTENT_LIFETIME_THRESHOLD, PERSISTENT_BUMP_AMOUNT);
+        env.storage().persistent().extend_ttl(
+            &ck,
+            PERSISTENT_LIFETIME_THRESHOLD,
+            PERSISTENT_BUMP_AMOUNT,
+        );
     }
     let py = DataKey::UserPendingYield(addr.clone());
     if env.storage().persistent().has(&py) {
-        env.storage().persistent().extend_ttl(&py, PERSISTENT_LIFETIME_THRESHOLD, PERSISTENT_BUMP_AMOUNT);
+        env.storage().persistent().extend_ttl(
+            &py,
+            PERSISTENT_LIFETIME_THRESHOLD,
+            PERSISTENT_BUMP_AMOUNT,
+        );
     }
 }
 
@@ -402,45 +561,67 @@ pub fn bump_user_yield_ttl(env: &Env, addr: &Address) {
 /// Minimum underlying-token amount that routes a withdrawal through the queue.
 /// 0 means all withdrawals are instant (queue disabled).
 pub fn get_withdrawal_queue_threshold(env: &Env) -> i128 {
-    env.storage().instance().get(&DataKey::WithdrawalQueueThreshold).unwrap_or(0)
+    env.storage()
+        .instance()
+        .get(&DataKey::WithdrawalQueueThreshold)
+        .unwrap_or(0)
 }
 
 pub fn set_withdrawal_queue_threshold(env: &Env, threshold: i128) {
-    env.storage().instance().set(&DataKey::WithdrawalQueueThreshold, &threshold);
+    env.storage()
+        .instance()
+        .set(&DataKey::WithdrawalQueueThreshold, &threshold);
 }
 
 /// Seconds a queued withdrawal must wait before it can be claimed.
 /// Default 0 (instant once queued — admin sets unbonding period).
 pub fn get_withdrawal_unbonding_secs(env: &Env) -> u64 {
-    env.storage().instance().get(&DataKey::WithdrawalUnbondingSecs).unwrap_or(0)
+    env.storage()
+        .instance()
+        .get(&DataKey::WithdrawalUnbondingSecs)
+        .unwrap_or(0)
 }
 
 pub fn set_withdrawal_unbonding_secs(env: &Env, secs: u64) {
-    env.storage().instance().set(&DataKey::WithdrawalUnbondingSecs, &secs);
+    env.storage()
+        .instance()
+        .set(&DataKey::WithdrawalUnbondingSecs, &secs);
 }
 
 /// Withdrawal fee in basis points (0–500). Applied on claim.
 pub fn get_withdrawal_fee_bps(env: &Env) -> u32 {
-    env.storage().instance().get(&DataKey::WithdrawalFeeBps).unwrap_or(0)
+    env.storage()
+        .instance()
+        .get(&DataKey::WithdrawalFeeBps)
+        .unwrap_or(0)
 }
 
 pub fn set_withdrawal_fee_bps(env: &Env, bps: u32) {
-    env.storage().instance().set(&DataKey::WithdrawalFeeBps, &bps);
+    env.storage()
+        .instance()
+        .set(&DataKey::WithdrawalFeeBps, &bps);
 }
 
 /// Monotonically-increasing withdrawal queue ID.  The next entry will use
 /// this value, then it is incremented.
 pub fn get_withdrawal_next_id(env: &Env) -> u64 {
-    env.storage().instance().get(&DataKey::WithdrawalNextId).unwrap_or(1)
+    env.storage()
+        .instance()
+        .get(&DataKey::WithdrawalNextId)
+        .unwrap_or(1)
 }
 
 pub fn set_withdrawal_next_id(env: &Env, id: u64) {
-    env.storage().instance().set(&DataKey::WithdrawalNextId, &id);
+    env.storage()
+        .instance()
+        .set(&DataKey::WithdrawalNextId, &id);
 }
 
 /// Retrieve a withdrawal queue entry.
 pub fn get_withdrawal_entry(env: &Env, id: u64) -> Option<WithdrawalEntry> {
-    env.storage().persistent().get(&DataKey::WithdrawalEntry(id))
+    env.storage()
+        .persistent()
+        .get(&DataKey::WithdrawalEntry(id))
 }
 
 /// Store a withdrawal queue entry.
@@ -449,12 +630,18 @@ pub fn set_withdrawal_entry(env: &Env, id: u64, entry: &WithdrawalEntry) {
         .persistent()
         .set(&DataKey::WithdrawalEntry(id), entry);
     let key = DataKey::WithdrawalEntry(id);
-    env.storage().persistent().extend_ttl(&key, PERSISTENT_LIFETIME_THRESHOLD, PERSISTENT_BUMP_AMOUNT);
+    env.storage().persistent().extend_ttl(
+        &key,
+        PERSISTENT_LIFETIME_THRESHOLD,
+        PERSISTENT_BUMP_AMOUNT,
+    );
 }
 
 /// Remove a withdrawal queue entry (after claim).
 pub fn remove_withdrawal_entry(env: &Env, id: u64) {
-    env.storage().persistent().remove(&DataKey::WithdrawalEntry(id));
+    env.storage()
+        .persistent()
+        .remove(&DataKey::WithdrawalEntry(id));
 }
 
 // ---------------------------------------------------------------------------
@@ -497,11 +684,16 @@ pub struct WithdrawalEntry {
 // ---------------------------------------------------------------------------
 
 pub fn get_whitelist_enabled(env: &Env) -> bool {
-    env.storage().instance().get(&DataKey::WhitelistEnabled).unwrap_or(false)
+    env.storage()
+        .instance()
+        .get(&DataKey::WhitelistEnabled)
+        .unwrap_or(false)
 }
 
 pub fn set_whitelist_enabled(env: &Env, enabled: bool) {
-    env.storage().instance().set(&DataKey::WhitelistEnabled, &enabled);
+    env.storage()
+        .instance()
+        .set(&DataKey::WhitelistEnabled, &enabled);
 }
 
 pub fn is_whitelisted(env: &Env, addr: &Address) -> bool {
@@ -516,7 +708,49 @@ pub fn set_whitelisted(env: &Env, addr: &Address, whitelisted: bool) {
         .persistent()
         .set(&DataKey::Whitelist(addr.clone()), &whitelisted);
     let key = DataKey::Whitelist(addr.clone());
-    env.storage().persistent().extend_ttl(&key, PERSISTENT_LIFETIME_THRESHOLD, PERSISTENT_BUMP_AMOUNT);
+    env.storage().persistent().extend_ttl(
+        &key,
+        PERSISTENT_LIFETIME_THRESHOLD,
+        PERSISTENT_BUMP_AMOUNT,
+    );
+}
+
+// ---------------------------------------------------------------------------
+// KYC deposit allowlist (Issue #916)
+// ---------------------------------------------------------------------------
+
+pub fn is_allowlist_enabled(env: &Env) -> bool {
+    env.storage()
+        .instance()
+        .get(&DataKey::AllowlistEnabled)
+        .unwrap_or(false)
+}
+
+pub fn set_allowlist_enabled(env: &Env, enabled: bool) {
+    env.storage()
+        .instance()
+        .set(&DataKey::AllowlistEnabled, &enabled);
+}
+
+pub fn is_allowlisted(env: &Env, address: &Address) -> bool {
+    env.storage()
+        .persistent()
+        .get(&DataKey::AllowlistedAddress(address.clone()))
+        .unwrap_or(false)
+}
+
+pub fn set_allowlisted(env: &Env, address: &Address, allowed: bool) {
+    let key = DataKey::AllowlistedAddress(address.clone());
+    if allowed {
+        env.storage().persistent().set(&key, &true);
+        env.storage().persistent().extend_ttl(
+            &key,
+            PERSISTENT_LIFETIME_THRESHOLD,
+            PERSISTENT_BUMP_AMOUNT,
+        );
+    } else {
+        env.storage().persistent().remove(&key);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -524,7 +758,10 @@ pub fn set_whitelisted(env: &Env, addr: &Address, whitelisted: bool) {
 // ---------------------------------------------------------------------------
 
 pub fn get_min_deposit(env: &Env) -> i128 {
-    env.storage().instance().get(&DataKey::MinDeposit).unwrap_or(10_000)
+    env.storage()
+        .instance()
+        .get(&DataKey::MinDeposit)
+        .unwrap_or(10_000)
 }
 
 pub fn set_min_deposit(env: &Env, amount: i128) {
@@ -552,11 +789,16 @@ pub fn set_vault_symbol(env: &Env, symbol: &soroban_sdk::String) {
 }
 
 pub fn get_vault_version(env: &Env) -> u32 {
-    env.storage().instance().get(&DataKey::VaultVersion).unwrap_or(1u32)
+    env.storage()
+        .instance()
+        .get(&DataKey::VaultVersion)
+        .unwrap_or(1u32)
 }
 
 pub fn set_vault_version(env: &Env, version: u32) {
-    env.storage().instance().set(&DataKey::VaultVersion, &version);
+    env.storage()
+        .instance()
+        .set(&DataKey::VaultVersion, &version);
 }
 
 // ---------------------------------------------------------------------------
@@ -564,7 +806,10 @@ pub fn set_vault_version(env: &Env, version: u32) {
 // ---------------------------------------------------------------------------
 
 pub fn get_decimals(env: &Env) -> u32 {
-    env.storage().instance().get(&DataKey::Decimals).unwrap_or(7u32)
+    env.storage()
+        .instance()
+        .get(&DataKey::Decimals)
+        .unwrap_or(7u32)
 }
 
 pub fn set_decimals(env: &Env, decimals: u32) {
@@ -576,11 +821,16 @@ pub fn set_decimals(env: &Env, decimals: u32) {
 // ---------------------------------------------------------------------------
 
 pub fn is_reentrancy_locked(env: &Env) -> bool {
-    env.storage().instance().get(&DataKey::ReentrancyGuard).unwrap_or(false)
+    env.storage()
+        .instance()
+        .get(&DataKey::ReentrancyGuard)
+        .unwrap_or(false)
 }
 
 pub fn set_reentrancy_lock(env: &Env, locked: bool) {
-    env.storage().instance().set(&DataKey::ReentrancyGuard, &locked);
+    env.storage()
+        .instance()
+        .set(&DataKey::ReentrancyGuard, &locked);
 }
 
 pub fn enter_reentrancy_guard(env: &Env) -> Result<(), VaultError> {
@@ -689,9 +939,15 @@ pub fn get_role_mask(env: &Env, addr: &Address) -> u32 {
 }
 
 pub fn set_role_mask(env: &Env, addr: &Address, mask: u32) {
-    env.storage().persistent().set(&DataKey::Role(addr.clone()), &mask);
+    env.storage()
+        .persistent()
+        .set(&DataKey::Role(addr.clone()), &mask);
     let key = DataKey::Role(addr.clone());
-    env.storage().persistent().extend_ttl(&key, PERSISTENT_LIFETIME_THRESHOLD, PERSISTENT_BUMP_AMOUNT);
+    env.storage().persistent().extend_ttl(
+        &key,
+        PERSISTENT_LIFETIME_THRESHOLD,
+        PERSISTENT_BUMP_AMOUNT,
+    );
 }
 
 pub fn has_role(env: &Env, addr: &Address, role: u32) -> bool {
@@ -711,15 +967,22 @@ pub fn clear_pending_admin(env: &Env) {
 }
 
 pub fn get_pending_admin_expiry(env: &Env) -> u64 {
-    env.storage().instance().get(&DataKey::PendingAdminExpiry).unwrap_or(0)
+    env.storage()
+        .instance()
+        .get(&DataKey::PendingAdminExpiry)
+        .unwrap_or(0)
 }
 
 pub fn set_pending_admin_expiry(env: &Env, expiry: u64) {
-    env.storage().instance().set(&DataKey::PendingAdminExpiry, &expiry);
+    env.storage()
+        .instance()
+        .set(&DataKey::PendingAdminExpiry, &expiry);
 }
 
 pub fn clear_pending_admin_expiry(env: &Env) {
-    env.storage().instance().remove(&DataKey::PendingAdminExpiry);
+    env.storage()
+        .instance()
+        .remove(&DataKey::PendingAdminExpiry);
 }
 
 pub fn has_multisig_signed(env: &Env, op_id: u64, signer: &Address) -> bool {
@@ -730,10 +993,7 @@ pub fn has_multisig_signed(env: &Env, op_id: u64, signer: &Address) -> bool {
 }
 
 pub fn record_multisig_vote(env: &Env, op_id: u64, signer: &Address) {
-    env.storage().instance().set(
-        &DataKey::MultiSigVote(op_id, signer.clone()),
-        &true,
-    );
+    env.storage()
+        .instance()
+        .set(&DataKey::MultiSigVote(op_id, signer.clone()), &true);
 }
-
-

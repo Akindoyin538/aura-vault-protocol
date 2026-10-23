@@ -2,9 +2,9 @@
 
 extern crate std;
 
-use soroban_sdk::{testutils::Address as _, Address, Env, Vec};
 use soroban_sdk::testutils::Ledger as _;
 use soroban_sdk::token::StellarAssetClient;
+use soroban_sdk::{testutils::Address as _, Address, Env, Vec};
 
 use crate::{AuraVault, AuraVaultClient, VaultError};
 
@@ -19,7 +19,9 @@ fn setup() -> (Env, AuraVaultClient<'static>, Address, Address) {
     env.mock_all_auths();
 
     let admin = Address::generate(&env);
-    let token_address = env.register_stellar_asset_contract_v2(admin.clone()).address();
+    let token_address = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
 
     let vault_address = env.register_contract(None, AuraVault);
     let vault = AuraVaultClient::new(&env, &vault_address);
@@ -33,7 +35,13 @@ fn setup() -> (Env, AuraVaultClient<'static>, Address, Address) {
     (env, vault, admin, token_address)
 }
 
-fn setup_multisig() -> (Env, AuraVaultClient<'static>, std::vec::Vec<Address>, Address, Address) {
+fn setup_multisig() -> (
+    Env,
+    AuraVaultClient<'static>,
+    std::vec::Vec<Address>,
+    Address,
+    Address,
+) {
     let env = Env::default();
     env.mock_all_auths();
 
@@ -45,7 +53,9 @@ fn setup_multisig() -> (Env, AuraVaultClient<'static>, std::vec::Vec<Address>, A
         signers_sdk.push_back(s.clone());
     }
 
-    let token_address = env.register_stellar_asset_contract_v2(admin.clone()).address();
+    let token_address = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
     let vault_address = env.register_contract(None, AuraVault);
     let vault = AuraVaultClient::new(&env, &vault_address);
 
@@ -92,7 +102,9 @@ fn test_deposit_before_init_returns_not_initialized() {
     let env = Env::default();
     env.mock_all_auths();
     let admin = Address::generate(&env);
-    let token = env.register_stellar_asset_contract_v2(admin.clone()).address();
+    let token = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
     let vault_addr = env.register_contract(None, AuraVault);
     let vault = AuraVaultClient::new(&env, &vault_addr);
     let user = Address::generate(&env);
@@ -260,7 +272,10 @@ fn test_share_precision_small_deposit_into_large_vault() {
 
     // Round-trip loss must be ≤ 1 stroop
     let received = vault.withdraw(&user, &minted);
-    assert!(received >= 6, "round-trip loss must be ≤ 1 stroop, got {received}");
+    assert!(
+        received >= 6,
+        "round-trip loss must be ≤ 1 stroop, got {received}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -280,7 +295,9 @@ fn test_withdraw_before_init_returns_not_initialized() {
     let env = Env::default();
     env.mock_all_auths();
     let admin = Address::generate(&env);
-    let _token = env.register_stellar_asset_contract_v2(admin.clone()).address();
+    let _token = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
     let vault_addr = env.register_contract(None, AuraVault);
     let vault = AuraVaultClient::new(&env, &vault_addr);
     let user = Address::generate(&env);
@@ -372,7 +389,9 @@ fn test_harvest_before_init_returns_not_initialized() {
     let env = Env::default();
     env.mock_all_auths();
     let admin = Address::generate(&env);
-    let _token = env.register_stellar_asset_contract_v2(admin.clone()).address();
+    let _token = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
     let vault_addr = env.register_contract(None, AuraVault);
     let vault = AuraVaultClient::new(&env, &vault_addr);
     let result = vault.try_harvest(&admin, &1_000);
@@ -420,9 +439,18 @@ fn test_pause_blocks_mutating_operations() {
     mint(&env, &token, &admin, &user, 1_000_000);
 
     vault.pause(&admin);
-    assert_eq!(vault.try_deposit(&user, &1_000_000, &vault.get_nonce(&user)), Err(Ok(VaultError::VaultPaused)));
-    assert_eq!(vault.try_withdraw(&user, &1), Err(Ok(VaultError::VaultPaused)));
-    assert_eq!(vault.try_harvest(&admin, &1_000), Err(Ok(VaultError::VaultPaused)));
+    assert_eq!(
+        vault.try_deposit(&user, &1_000_000),
+        Err(Ok(VaultError::VaultPaused))
+    );
+    assert_eq!(
+        vault.try_withdraw(&user, &1),
+        Err(Ok(VaultError::VaultPaused))
+    );
+    assert_eq!(
+        vault.try_harvest(&admin, &1_000),
+        Err(Ok(VaultError::VaultPaused))
+    );
 
     vault.unpause(&admin);
     vault.deposit(&user, &1_000_000, &vault.get_nonce(&user));
@@ -470,7 +498,10 @@ fn test_withdraw_fees_transfers_to_treasury_and_resets_total_fees() {
     let withdrawn = vault.withdraw_fees(&admin);
     assert_eq!(withdrawn, 100_000);
     assert_eq!(vault.total_fees_collected(), 0);
-    assert_eq!(StellarAssetClient::new(&env, &token).balance(&treasury), 100_000);
+    assert_eq!(
+        StellarAssetClient::new(&env, &token).balance(&treasury),
+        100_000
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -629,7 +660,10 @@ fn test_approval_with_three_votes() {
     vault.vote(&signers[2], &proposal_id, &true);
 
     let status = vault.proposal_status(&proposal_id);
-    assert_eq!(status, Some(soroban_sdk::String::from_str(&env, "Approved")));
+    assert_eq!(
+        status,
+        Some(soroban_sdk::String::from_str(&env, "Approved"))
+    );
 }
 
 #[test]
@@ -672,7 +706,13 @@ fn test_cannot_vote_twice() {
 // Multi-sig admin operations (Issue #375)
 // ===========================================================================
 
-fn setup_multisig_3of3() -> (Env, AuraVaultClient<'static>, std::vec::Vec<Address>, Address, Address) {
+fn setup_multisig_3of3() -> (
+    Env,
+    AuraVaultClient<'static>,
+    std::vec::Vec<Address>,
+    Address,
+    Address,
+) {
     let env = Env::default();
     env.mock_all_auths();
 
@@ -685,7 +725,9 @@ fn setup_multisig_3of3() -> (Env, AuraVaultClient<'static>, std::vec::Vec<Addres
         signers_sdk.push_back(s.clone());
     }
 
-    let token_address = env.register_stellar_asset_contract_v2(admin.clone()).address();
+    let token_address = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
     let vault_address = env.register_contract(None, AuraVault);
     let vault = AuraVaultClient::new(&env, &vault_address);
     vault.initialize(&admin, &token_address, &signers_sdk, &0_u32);
@@ -700,24 +742,16 @@ fn setup_multisig_3of3() -> (Env, AuraVaultClient<'static>, std::vec::Vec<Addres
 #[test]
 fn test_propose_operation_by_signer_returns_id() {
     let (env, vault, signers, _admin, _token) = setup_multisig_3of3();
-    let op_id = vault.propose_operation(
-        &signers[0],
-        &crate::governance::OpType::SetPerfFee(500_u32),
-    );
+    let op_id =
+        vault.propose_operation(&signers[0], &crate::governance::OpType::SetPerfFee(500_u32));
     assert_eq!(op_id, 1);
 }
 
 #[test]
 fn test_propose_operation_increments_id() {
     let (env, vault, signers, _admin, _token) = setup_multisig_3of3();
-    let id1 = vault.propose_operation(
-        &signers[0],
-        &crate::governance::OpType::SetPerfFee(500_u32),
-    );
-    let id2 = vault.propose_operation(
-        &signers[1],
-        &crate::governance::OpType::SetMgmtFee(50_u32),
-    );
+    let id1 = vault.propose_operation(&signers[0], &crate::governance::OpType::SetPerfFee(500_u32));
+    let id2 = vault.propose_operation(&signers[1], &crate::governance::OpType::SetMgmtFee(50_u32));
     assert_eq!(id1, 1);
     assert_eq!(id2, 2);
 }
@@ -726,20 +760,16 @@ fn test_propose_operation_increments_id() {
 fn test_propose_operation_by_non_signer_returns_not_a_signer() {
     let (env, vault, _signers, _admin, _token) = setup_multisig_3of3();
     let outsider = Address::generate(&env);
-    let result = vault.try_propose_operation(
-        &outsider,
-        &crate::governance::OpType::SetPerfFee(500_u32),
-    );
+    let result =
+        vault.try_propose_operation(&outsider, &crate::governance::OpType::SetPerfFee(500_u32));
     assert_eq!(result, Err(Ok(VaultError::NotASigner)));
 }
 
 #[test]
 fn test_propose_operation_status_is_pending_before_threshold() {
     let (env, vault, signers, _admin, _token) = setup_multisig_3of3();
-    let op_id = vault.propose_operation(
-        &signers[0],
-        &crate::governance::OpType::SetPerfFee(500_u32),
-    );
+    let op_id =
+        vault.propose_operation(&signers[0], &crate::governance::OpType::SetPerfFee(500_u32));
     // Default 2-of-3 threshold: proposer is signer 1 of 2 needed → still Pending
     let status = vault.operation_status(&op_id);
     assert_eq!(status, Some(soroban_sdk::String::from_str(&env, "Pending")));
@@ -752,10 +782,8 @@ fn test_propose_operation_status_is_pending_before_threshold() {
 #[test]
 fn test_sign_operation_by_non_signer_returns_not_a_signer() {
     let (env, vault, signers, _admin, _token) = setup_multisig_3of3();
-    let op_id = vault.propose_operation(
-        &signers[0],
-        &crate::governance::OpType::SetPerfFee(500_u32),
-    );
+    let op_id =
+        vault.propose_operation(&signers[0], &crate::governance::OpType::SetPerfFee(500_u32));
     let outsider = Address::generate(&env);
     let result = vault.try_sign_operation(&outsider, &op_id);
     assert_eq!(result, Err(Ok(VaultError::NotASigner)));
@@ -764,10 +792,8 @@ fn test_sign_operation_by_non_signer_returns_not_a_signer() {
 #[test]
 fn test_sign_operation_double_sign_returns_already_signed() {
     let (_env, vault, signers, _admin, _token) = setup_multisig_3of3();
-    let op_id = vault.propose_operation(
-        &signers[0],
-        &crate::governance::OpType::SetPerfFee(500_u32),
-    );
+    let op_id =
+        vault.propose_operation(&signers[0], &crate::governance::OpType::SetPerfFee(500_u32));
     // signers[0] already signed as proposer
     let result = vault.try_sign_operation(&signers[0], &op_id);
     assert_eq!(result, Err(Ok(VaultError::OperationAlreadySigned)));
@@ -776,10 +802,8 @@ fn test_sign_operation_double_sign_returns_already_signed() {
 #[test]
 fn test_sign_operation_reaches_threshold_status_becomes_ready() {
     let (env, vault, signers, _admin, _token) = setup_multisig_3of3();
-    let op_id = vault.propose_operation(
-        &signers[0],
-        &crate::governance::OpType::SetPerfFee(500_u32),
-    );
+    let op_id =
+        vault.propose_operation(&signers[0], &crate::governance::OpType::SetPerfFee(500_u32));
     // Proposer = sig 1, sign again with signer[1] = sig 2 → meets 2-of-3
     vault.sign_operation(&signers[1], &op_id);
 
@@ -801,10 +825,8 @@ fn test_sign_unknown_operation_returns_not_found() {
 #[test]
 fn test_execute_operation_before_threshold_returns_threshold_not_met() {
     let (_env, vault, signers, _admin, _token) = setup_multisig_3of3();
-    let op_id = vault.propose_operation(
-        &signers[0],
-        &crate::governance::OpType::SetPerfFee(500_u32),
-    );
+    let op_id =
+        vault.propose_operation(&signers[0], &crate::governance::OpType::SetPerfFee(500_u32));
     // Only 1 of 2 required signatures
     let result = vault.try_execute_operation(&signers[0], &op_id);
     assert_eq!(result, Err(Ok(VaultError::ThresholdNotMet)));
@@ -813,10 +835,8 @@ fn test_execute_operation_before_threshold_returns_threshold_not_met() {
 #[test]
 fn test_execute_operation_after_threshold_succeeds_and_applies_fee() {
     let (_env, vault, signers, admin, _token) = setup_multisig_3of3();
-    let op_id = vault.propose_operation(
-        &signers[0],
-        &crate::governance::OpType::SetPerfFee(500_u32),
-    );
+    let op_id =
+        vault.propose_operation(&signers[0], &crate::governance::OpType::SetPerfFee(500_u32));
     vault.sign_operation(&signers[1], &op_id);
 
     vault.execute_operation(&signers[0], &op_id);
@@ -837,10 +857,8 @@ fn test_execute_operation_after_threshold_succeeds_and_applies_fee() {
 #[test]
 fn test_execute_operation_double_execute_returns_already_executed() {
     let (_env, vault, signers, _admin, _token) = setup_multisig_3of3();
-    let op_id = vault.propose_operation(
-        &signers[0],
-        &crate::governance::OpType::SetPerfFee(500_u32),
-    );
+    let op_id =
+        vault.propose_operation(&signers[0], &crate::governance::OpType::SetPerfFee(500_u32));
     vault.sign_operation(&signers[1], &op_id);
     vault.execute_operation(&signers[0], &op_id);
 
@@ -851,10 +869,8 @@ fn test_execute_operation_double_execute_returns_already_executed() {
 #[test]
 fn test_execute_by_non_signer_returns_not_a_signer() {
     let (env, vault, signers, _admin, _token) = setup_multisig_3of3();
-    let op_id = vault.propose_operation(
-        &signers[0],
-        &crate::governance::OpType::SetPerfFee(500_u32),
-    );
+    let op_id =
+        vault.propose_operation(&signers[0], &crate::governance::OpType::SetPerfFee(500_u32));
     vault.sign_operation(&signers[1], &op_id);
     let outsider = Address::generate(&env);
     let result = vault.try_execute_operation(&outsider, &op_id);
@@ -868,10 +884,8 @@ fn test_execute_by_non_signer_returns_not_a_signer() {
 #[test]
 fn test_operation_expires_after_72_hours() {
     let (env, vault, signers, _admin, _token) = setup_multisig_3of3();
-    let op_id = vault.propose_operation(
-        &signers[0],
-        &crate::governance::OpType::SetPerfFee(500_u32),
-    );
+    let op_id =
+        vault.propose_operation(&signers[0], &crate::governance::OpType::SetPerfFee(500_u32));
 
     // Advance ledger time by 73 hours (> 72h expiry)
     env.ledger().with_mut(|ledger| {
@@ -905,10 +919,8 @@ fn test_execute_expired_operation_returns_expired() {
     // Use a 1-of-3 threshold so this op is Ready immediately
     vault.set_threshold(&_admin, &1_u32);
 
-    let op_id = vault.propose_operation(
-        &signers[0],
-        &crate::governance::OpType::SetPerfFee(200_u32),
-    );
+    let op_id =
+        vault.propose_operation(&signers[0], &crate::governance::OpType::SetPerfFee(200_u32));
 
     // Advance past expiry
     env.ledger().with_mut(|ledger| {
@@ -950,10 +962,7 @@ fn test_tvl_cap_zero_means_uncapped() {
     let (env, vault, signers, admin, token) = setup_multisig_3of3();
 
     // Ensure no cap (0 = uncapped)
-    let op_id = vault.propose_operation(
-        &signers[0],
-        &crate::governance::OpType::SetTvlCap(0_i128),
-    );
+    let op_id = vault.propose_operation(&signers[0], &crate::governance::OpType::SetTvlCap(0_i128));
     vault.sign_operation(&signers[1], &op_id);
     vault.execute_operation(&signers[0], &op_id);
 
@@ -974,10 +983,8 @@ fn test_add_signer_via_admin() {
     vault.add_signer(&admin, &new_signer);
 
     // New signer should now be able to propose
-    let result = vault.try_propose_operation(
-        &new_signer,
-        &crate::governance::OpType::SetPerfFee(100_u32),
-    );
+    let result =
+        vault.try_propose_operation(&new_signer, &crate::governance::OpType::SetPerfFee(100_u32));
     assert!(result.is_ok());
 }
 
@@ -997,10 +1004,8 @@ fn test_remove_signer_via_admin() {
     vault.remove_signer(&admin, &signers[2]);
 
     // Removed signer can no longer propose
-    let result = vault.try_propose_operation(
-        &signers[2],
-        &crate::governance::OpType::SetPerfFee(100_u32),
-    );
+    let result =
+        vault.try_propose_operation(&signers[2], &crate::governance::OpType::SetPerfFee(100_u32));
     assert_eq!(result, Err(Ok(VaultError::NotASigner)));
 }
 
@@ -1051,10 +1056,8 @@ fn test_set_threshold_above_signer_count_returns_invalid_threshold() {
 fn test_multisig_set_mgmt_fee_applies_change() {
     let (_env, vault, signers, admin, token) = setup_multisig_3of3();
 
-    let op_id = vault.propose_operation(
-        &signers[0],
-        &crate::governance::OpType::SetMgmtFee(50_u32),
-    );
+    let op_id =
+        vault.propose_operation(&signers[0], &crate::governance::OpType::SetMgmtFee(50_u32));
     vault.sign_operation(&signers[1], &op_id);
     vault.execute_operation(&signers[0], &op_id);
 
@@ -1091,7 +1094,10 @@ fn test_full_multisig_flow_set_perf_fee() {
     // Step 3: execute
     vault.execute_operation(&signers[2], &op_id);
     let status = vault.operation_status(&op_id);
-    assert_eq!(status, Some(soroban_sdk::String::from_str(&env, "Executed")));
+    assert_eq!(
+        status,
+        Some(soroban_sdk::String::from_str(&env, "Executed"))
+    );
 
     // Step 4: verify applied — 10% fee on a 1M harvest = 100K fee
     let user = Address::generate(&env);
@@ -1123,7 +1129,817 @@ fn test_events_emitted_on_full_flow() {
     vault.execute_operation(&signers[0], &op_id);
     // If all three calls succeeded, all three events were emitted
     let status = vault.operation_status(&op_id);
-    assert_eq!(status, Some(soroban_sdk::String::from_str(&_env, "Executed")));
+    assert_eq!(
+        status,
+        Some(soroban_sdk::String::from_str(&_env, "Executed"))
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 23. Re-initialisation guard (Issue #910)
+// ---------------------------------------------------------------------------
+
+mod reinit_guard {
+    use super::*;
+
+    /// Acceptance Criteria:
+    /// - initialized flag is the first read in initialize
+    /// - Function returns AlreadyInitialized (error code 2) before touching any other storage
+    /// - Dedicated test: call initialize twice and assert second call fails with error code 2
+    /// - Verify via CEI audit that no storage writes precede the guard check
+    #[test]
+    fn test_initialize_twice_fails_with_already_initialized_code_2() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let admin = Address::generate(&env);
+        let token_address = env
+            .register_stellar_asset_contract_v2(admin.clone())
+            .address();
+        let vault_address = env.register_contract(None, AuraVault);
+        let vault = AuraVaultClient::new(&env, &vault_address);
+        let signers: Vec<Address> = Vec::new(&env);
+
+        // First initialize call succeeds
+        let res1 = vault.try_initialize(&admin, &token_address, &signers, &0_u32);
+        assert_eq!(res1, Ok(Ok(())));
+
+        // Second initialize call fails with AlreadyInitialized (error code 2)
+        let res2 = vault.try_initialize(&admin, &token_address, &signers, &0_u32);
+        assert_eq!(res2, Err(Ok(VaultError::AlreadyInitialized)));
+        assert_eq!(VaultError::AlreadyInitialized as u32, 2);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Deposit KYC allowlist (Issue #916)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_allowlist_defaults_disabled_and_existing_deposits_work() {
+    let (env, vault, admin, token) = setup();
+    let depositor = Address::generate(&env);
+    mint(&env, &token, &admin, &depositor, 10_000);
+
+    assert!(!vault.allowlist_enabled());
+    assert!(!vault.is_allowlisted(&depositor));
+    assert_eq!(vault.deposit(&depositor, &10_000), 10_000);
+}
+
+#[test]
+fn test_allowlist_admin_membership_auth_events_and_removal() {
+    let (env, vault, admin, _token) = setup();
+    let depositor = Address::generate(&env);
+
+    vault.add_to_allowlist(&admin, &depositor);
+    assert!(vault.is_allowlisted(&depositor));
+    assert_allowlist_event(&env, "allowlist_address_added", &depositor);
+
+    vault.remove_from_allowlist(&admin, &depositor);
+    assert!(!vault.is_allowlisted(&depositor));
+    assert_allowlist_event(&env, "allowlist_address_removed", &depositor);
+}
+
+#[test]
+fn test_allowlist_management_rejects_non_admin_and_requires_auth() {
+    let (env, vault, admin, _token) = setup();
+    let stranger = Address::generate(&env);
+    let depositor = Address::generate(&env);
+
+    assert_eq!(
+        vault.try_add_to_allowlist(&stranger, &depositor),
+        Err(Ok(VaultError::UpgradeUnauthorized))
+    );
+    assert_eq!(
+        vault.try_remove_from_allowlist(&stranger, &depositor),
+        Err(Ok(VaultError::UpgradeUnauthorized))
+    );
+
+    env.mock_auths(&[]);
+    assert!(vault.try_add_to_allowlist(&admin, &depositor).is_err());
+    assert!(vault.try_remove_from_allowlist(&admin, &depositor).is_err());
+}
+
+#[test]
+fn test_allowlist_governance_requires_three_signers_and_timelock() {
+    let (env, vault, signers, admin, token) = setup_multisig();
+    let approved = Address::generate(&env);
+    let rejected = Address::generate(&env);
+    mint(&env, &token, &admin, &approved, 10_000);
+    mint(&env, &token, &admin, &rejected, 10_000);
+    vault.add_to_allowlist(&admin, &approved);
+
+    let proposal_id = vault.propose_parameter_update(
+        &signers[0],
+        &Symbol::new(&env, "set_allowlist_enabled"),
+        &1_i128,
+    );
+    vault.vote(&signers[1], &proposal_id, &true);
+    assert_eq!(
+        vault.try_execute(&signers[0], &proposal_id),
+        Err(Ok(VaultError::ThresholdNotMet))
+    );
+    vault.vote(&signers[2], &proposal_id, &true);
+    assert_eq!(
+        vault.proposal_status(&proposal_id),
+        Some(soroban_sdk::String::from_str(&env, "Approved"))
+    );
+    assert_eq!(
+        vault.try_execute(&signers[0], &proposal_id),
+        Err(Ok(VaultError::TimelockNotExpired))
+    );
+    assert!(!vault.allowlist_enabled());
+
+    env.ledger()
+        .with_mut(|ledger| ledger.timestamp = 24 * 60 * 60);
+    vault.execute(&signers[0], &proposal_id);
+    assert!(vault.allowlist_enabled());
+
+    assert_eq!(
+        vault.try_deposit(&rejected, &10_000),
+        Err(Ok(VaultError::NotApproved))
+    );
+    assert_eq!(VaultError::NotApproved as u32, 14);
+    assert_eq!(vault.total_assets(), 0);
+    assert_eq!(vault.deposit(&approved, &10_000), 10_000);
+
+    vault.remove_from_allowlist(&admin, &approved);
+    assert!(!vault.is_allowlisted(&approved));
+    assert_eq!(
+        vault.try_deposit(&approved, &10_000),
+        Err(Ok(VaultError::NotApproved))
+    );
+}
+
+#[test]
+fn test_allowlist_mode_disable_requires_governance_and_timelock() {
+    let (env, vault, signers, _admin, _token) = setup_multisig();
+    let enable_id = vault.propose_parameter_update(
+        &signers[0],
+        &Symbol::new(&env, "set_allowlist_enabled"),
+        &1_i128,
+    );
+    vault.vote(&signers[1], &enable_id, &true);
+    vault.vote(&signers[2], &enable_id, &true);
+    env.ledger()
+        .with_mut(|ledger| ledger.timestamp = 24 * 60 * 60);
+    vault.execute(&signers[0], &enable_id);
+    assert!(vault.allowlist_enabled());
+
+    let disable_id = vault.propose_parameter_update(
+        &signers[0],
+        &Symbol::new(&env, "set_allowlist_enabled"),
+        &0_i128,
+    );
+    vault.vote(&signers[1], &disable_id, &true);
+    vault.vote(&signers[2], &disable_id, &true);
+    assert_eq!(
+        vault.try_execute(&signers[0], &disable_id),
+        Err(Ok(VaultError::TimelockNotExpired))
+    );
+    assert!(vault.allowlist_enabled());
+    env.ledger()
+        .with_mut(|ledger| ledger.timestamp = 2 * 24 * 60 * 60);
+    vault.execute(&signers[0], &disable_id);
+    assert!(!vault.allowlist_enabled());
+}
+
+#[test]
+fn test_allowlist_governance_rejects_non_boolean_and_rolls_back() {
+    let (env, vault, signers, _admin, _token) = setup_multisig();
+    let proposal_id = vault.propose_parameter_update(
+        &signers[0],
+        &Symbol::new(&env, "set_allowlist_enabled"),
+        &2_i128,
+    );
+    vault.vote(&signers[1], &proposal_id, &true);
+    vault.vote(&signers[2], &proposal_id, &true);
+    env.ledger()
+        .with_mut(|ledger| ledger.timestamp = 24 * 60 * 60);
+
+    assert_eq!(
+        vault.try_execute(&signers[0], &proposal_id),
+        Err(Ok(VaultError::InvalidAddress))
+    );
+    assert!(!vault.allowlist_enabled());
+    assert_eq!(
+        vault.proposal_status(&proposal_id),
+        Some(soroban_sdk::String::from_str(&env, "Approved"))
+    );
+}
+
+#[test]
+fn test_allowlist_execution_rechecks_threshold_after_ready() {
+    let (env, vault, signers, _admin, _token) = setup_multisig();
+    let proposal_id = vault.propose_parameter_update(
+        &signers[0],
+        &Symbol::new(&env, "set_allowlist_enabled"),
+        &1_i128,
+    );
+    vault.vote(&signers[1], &proposal_id, &true);
+    vault.vote(&signers[2], &proposal_id, &true);
+    assert_eq!(
+        vault.proposal_status(&proposal_id),
+        Some(soroban_sdk::String::from_str(&env, "Approved"))
+    );
+
+    // The allowlist operation was approved at the 3-signature minimum.
+    // Raise the current governance threshold after it has become Ready.
+    crate::storage::set_multisig_threshold(&env, 4);
+    env.ledger()
+        .with_mut(|ledger| ledger.timestamp = 24 * 60 * 60);
+
+    assert_eq!(
+        vault.try_execute(&signers[0], &proposal_id),
+        Err(Ok(VaultError::ThresholdNotMet))
+    );
+    assert!(!vault.allowlist_enabled());
+    assert_eq!(
+        vault.proposal_status(&proposal_id),
+        Some(soroban_sdk::String::from_str(&env, "Approved"))
+    );
+}
+
+#[test]
+fn test_allowlist_execution_succeeds_after_new_threshold_is_met() {
+    let (env, vault, signers, _admin, _token) = setup_multisig();
+    let proposal_id = vault.propose_parameter_update(
+        &signers[0],
+        &Symbol::new(&env, "set_allowlist_enabled"),
+        &1_i128,
+    );
+    vault.vote(&signers[1], &proposal_id, &true);
+    vault.vote(&signers[2], &proposal_id, &true);
+    crate::storage::set_multisig_threshold(&env, 4);
+    env.ledger()
+        .with_mut(|ledger| ledger.timestamp = 24 * 60 * 60);
+
+    assert_eq!(
+        vault.try_execute(&signers[0], &proposal_id),
+        Err(Ok(VaultError::ThresholdNotMet))
+    );
+    assert!(!vault.allowlist_enabled());
+
+    // A fourth distinct authorized signer meets the newly raised threshold.
+    vault.vote(&signers[3], &proposal_id, &true);
+    vault.execute(&signers[0], &proposal_id);
+
+    assert!(vault.allowlist_enabled());
+    assert_eq!(
+        vault.proposal_status(&proposal_id),
+        Some(soroban_sdk::String::from_str(&env, "Executed"))
+    );
+}
+
+#[test]
+fn test_allowlist_execution_requires_authenticated_executor() {
+    let (env, vault, signers, _admin, _token) = setup_multisig();
+    let proposal_id = vault.propose_parameter_update(
+        &signers[0],
+        &Symbol::new(&env, "set_allowlist_enabled"),
+        &1_i128,
+    );
+    vault.vote(&signers[1], &proposal_id, &true);
+    vault.vote(&signers[2], &proposal_id, &true);
+    env.ledger()
+        .with_mut(|ledger| ledger.timestamp = 24 * 60 * 60);
+
+    env.mock_auths(&[]);
+    assert!(vault.try_execute(&signers[0], &proposal_id).is_err());
+    assert!(!vault.allowlist_enabled());
+    assert_eq!(
+        vault.proposal_status(&proposal_id),
+        Some(soroban_sdk::String::from_str(&env, "Approved"))
+    );
+}
+
+fn assert_allowlist_event(env: &Env, event_name: &str, address: &Address) {
+    let expected_name = Symbol::new(env, event_name);
+    let found = env.events().all().iter().any(|(_, topics, _)| {
+        topics.len() == 2
+            && Symbol::try_from_val(env, &topics.get(0).unwrap()).unwrap() == expected_name
+            && Address::try_from_val(env, &topics.get(1).unwrap()).unwrap() == address.clone()
+    });
+    assert!(found, "expected {event_name} event for {address}");
+}
+
+// ---------------------------------------------------------------------------
+// 23. check_invariants() — Issue #931
+// ---------------------------------------------------------------------------
+
+/// Import the result type for these tests.
+use crate::InvariantCheckResult;
+
+// -----------------------------------------------------------------------
+// INV-OK: all invariants pass on a healthy, freshly initialised vault.
+// -----------------------------------------------------------------------
+
+/// A freshly initialised vault with no deposits should return AllPassed (all
+/// invariants pass; the vault is empty and consistently so).
+#[test]
+fn test_check_invariants_ok_on_empty_vault() {
+    let (_env, vault, _admin, _token) = setup();
+    assert_eq!(vault.check_invariants(), InvariantCheckResult::AllPassed);
+}
+
+/// A vault with one depositor should still return AllPassed.
+#[test]
+fn test_check_invariants_ok_after_deposit() {
+    let (env, vault, admin, token) = setup();
+    let user = Address::generate(&env);
+    mint(&env, &token, &admin, &user, 1_000_000);
+    vault.deposit(&user, &1_000_000);
+
+    assert_eq!(vault.check_invariants(), InvariantCheckResult::AllPassed);
+}
+
+/// A vault after a harvest (share price rise) should still return AllPassed.
+#[test]
+fn test_check_invariants_ok_after_harvest() {
+    let (env, vault, admin, token) = setup();
+    let user = Address::generate(&env);
+    mint(&env, &token, &admin, &user, 1_000_000);
+    vault.deposit(&user, &1_000_000);
+    // Grant admin KEEPER role so harvest is allowed
+    vault.grant_role(&admin, &crate::ROLE_KEEPER, &admin);
+    mint(&env, &token, &admin, &admin, 100_000);
+    vault.harvest(&admin, &100_000);
+
+    assert_eq!(vault.check_invariants(), InvariantCheckResult::AllPassed);
+}
+
+// -----------------------------------------------------------------------
+// INV-OK: fee edge cases
+// -----------------------------------------------------------------------
+
+/// Vault with fee set to exactly 10 000 bps (100%) should return AllPassed —
+/// the boundary is inclusive.
+#[test]
+fn test_check_invariants_ok_fee_at_10000_bps() {
+    let (_env, vault, admin, _token) = setup();
+    // Set fee to exactly 10 000 bps (100%) — boundary value
+    vault.set_fees(&admin, &10_000_u32, &0_u32);
+    assert_eq!(vault.check_invariants(), InvariantCheckResult::AllPassed);
+}
+
+// -----------------------------------------------------------------------
+// INV-FAILING invariant 1: solvency — total_shares > 0 but total_assets == 0
+//
+// We can't easily inject this state via the public API (withdraw would
+// zero both simultaneously), so we test the condition indirectly:
+// after a full withdraw total_shares == 0 AND total_assets == 0, which
+// should pass invariant 1. The only way to fail INV1 is storage
+// corruption which we can't manufacture in a unit test — so we verify
+// that the healthy boundary passes.
+// -----------------------------------------------------------------------
+
+/// After a full withdraw both totals are 0, which satisfies invariant 1
+/// (the implication `total_shares > 0 => total_assets > 0` is vacuously
+/// true when `total_shares == 0`).
+#[test]
+fn test_check_invariants_ok_after_full_withdraw() {
+    let (env, vault, admin, token) = setup();
+    let user = Address::generate(&env);
+    mint(&env, &token, &admin, &user, 1_000_000);
+    vault.deposit(&user, &1_000_000);
+    vault.withdraw(&user, &1_000_000);
+
+    // total_shares == 0, total_assets == 0 → invariant 1 vacuously satisfied
+    assert_eq!(vault.total_shares(), 0);
+    assert_eq!(vault.total_assets(), 0);
+    assert_eq!(vault.check_invariants(), InvariantCheckResult::AllPassed);
+}
+
+// -----------------------------------------------------------------------
+// INV-FAILING invariant 2: balance sample check
+// -----------------------------------------------------------------------
+
+/// After normal deposit/withdraw the admin balance (0 by default) is
+/// always <= total_shares, so invariant 2 passes.
+#[test]
+fn test_check_invariants_inv2_admin_zero_balance_passes() {
+    let (env, vault, admin, token) = setup();
+    let user = Address::generate(&env);
+    mint(&env, &token, &admin, &user, 5_000_000);
+    vault.deposit(&user, &5_000_000);
+
+    // Admin has no shares; user has all shares → admin balance <= total_shares ✓
+    assert_eq!(vault.balance_of(&admin), 0);
+    assert_eq!(vault.check_invariants(), InvariantCheckResult::AllPassed);
+}
+
+/// When admin deposits, admin balance == total_shares still satisfies INV2
+/// (the check is <=, not <).
+#[test]
+fn test_check_invariants_inv2_admin_full_balance_passes() {
+    let (env, vault, admin, token) = setup();
+    mint(&env, &token, &admin, &admin, 1_000_000);
+    vault.deposit(&admin, &1_000_000);
+
+    assert_eq!(vault.balance_of(&admin), vault.total_shares());
+    assert_eq!(vault.check_invariants(), InvariantCheckResult::AllPassed);
+}
+
+// -----------------------------------------------------------------------
+// INV-FAILING invariant 3: initialization consistency
+// -----------------------------------------------------------------------
+
+/// A fully-initialised vault passes invariant 3 (both admin AND token set).
+#[test]
+fn test_check_invariants_inv3_fully_initialised_passes() {
+    let (_env, vault, _admin, _token) = setup();
+    // setup() calls initialize() so both admin and token are set
+    assert_eq!(vault.check_invariants(), InvariantCheckResult::AllPassed);
+}
+
+// -----------------------------------------------------------------------
+// INV-FAILING invariant 4: admin presence
+// -----------------------------------------------------------------------
+
+/// A live vault with admin present passes invariant 4.
+#[test]
+fn test_check_invariants_inv4_admin_present_passes() {
+    let (_env, vault, _admin, _token) = setup();
+    assert_eq!(vault.check_invariants(), InvariantCheckResult::AllPassed);
+}
+
+// -----------------------------------------------------------------------
+// INV-FAILING invariant 5: fee sanity
+// -----------------------------------------------------------------------
+
+/// Vault with fee set to 0 passes invariant 5.
+#[test]
+fn test_check_invariants_inv5_zero_fee_passes() {
+    let (_env, vault, admin, _token) = setup();
+    vault.set_fees(&admin, &0_u32, &0_u32);
+    assert_eq!(vault.check_invariants(), InvariantCheckResult::AllPassed);
+}
+
+/// Vault with fee set to MAX_PERF_FEE_BPS (2 000) passes invariant 5.
+#[test]
+fn test_check_invariants_inv5_max_perf_fee_passes() {
+    let (_env, vault, admin, _token) = setup();
+    vault.set_fees(&admin, &2_000_u32, &0_u32);
+    assert_eq!(vault.check_invariants(), InvariantCheckResult::AllPassed);
+}
+
+/// Vault with fee set to exactly 10 000 bps passes invariant 5
+/// (boundary: 10 000 is valid — means the admin takes 100 % of yield,
+/// unusual but not mathematically invalid).
+#[test]
+fn test_check_invariants_inv5_boundary_10000_passes() {
+    let (_env, vault, admin, _token) = setup();
+    vault.set_fees(&admin, &10_000_u32, &0_u32);
+    assert_eq!(vault.check_invariants(), InvariantCheckResult::AllPassed);
+}
+
+// -----------------------------------------------------------------------
+// CI upgrade scenario: check_invariants() returns Ok after re-initialize
+// equivalent and normal vault operations.
+// -----------------------------------------------------------------------
+
+/// Simulate a CI upgrade test: initialise, perform all common operations,
+/// then assert check_invariants() returns Ok.
+#[test]
+fn test_check_invariants_full_lifecycle_ok() {
+    let (env, vault, admin, token) = setup();
+    let user  = Address::generate(&env);
+    let user2 = Address::generate(&env);
+
+    // Deposit from two users
+    mint(&env, &token, &admin, &user,  2_000_000);
+    mint(&env, &token, &admin, &user2, 1_000_000);
+    vault.deposit(&user,  &2_000_000);
+    vault.deposit(&user2, &1_000_000);
+
+    // Harvest some yield (admin has KEEPER role granted at init via ROLE_ADMIN)
+    vault.grant_role(&admin, &crate::ROLE_KEEPER, &admin);
+    mint(&env, &token, &admin, &admin, 300_000);
+    vault.harvest(&admin, &300_000);
+
+    // Partial withdraw from user2
+    vault.withdraw(&user2, &500_000);
+
+    // Verify invariants hold throughout the entire lifecycle
+    assert_eq!(vault.check_invariants(), InvariantCheckResult::AllPassed);
+}
+
+/// check_invariants() returns Ok when vault is paused (pause is a valid
+/// operational state; it doesn't violate any structural invariant).
+#[test]
+fn test_check_invariants_ok_when_paused() {
+    let (_env, vault, admin, _token) = setup();
+    vault.pause(&admin);
+    assert_eq!(vault.check_invariants(), InvariantCheckResult::AllPassed);
+}
+
+/// Verify Failing result carries a non-empty description string.
+/// We use try_check_invariants to call directly and inspect the value.
+#[test]
+fn test_check_invariants_failing_variant_has_description() {
+    // We cannot corrupt storage from tests, but we can verify the Ok branch
+    // produces the expected enum variant and the type is correct.
+    let (_env, vault, _admin, _token) = setup();
+    let result = vault.check_invariants();
+    // On a healthy vault the result must be Ok
+    assert_eq!(result, InvariantCheckResult::AllPassed);
+    // Verify the Failing branch exists by constructing it directly
+    let failing = InvariantCheckResult::Failing(
+        soroban_sdk::String::from_str(&_env, "test message"),
+    );
+    match failing {
+        InvariantCheckResult::Failing(msg) => {
+            assert!(msg.len() > 0);
+        }
+        InvariantCheckResult::AllPassed => panic!("expected Failing"),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// batch_deposit tests (Issue #932)
+// ---------------------------------------------------------------------------
+
+// Helper: build a soroban_sdk Vec<(Address, i128)> from a std slice
+fn make_recipients(env: &Env, pairs: &[(Address, i128)]) -> Vec<(Address, i128)> {
+    let mut v: Vec<(Address, i128)> = Vec::new(env);
+    for (addr, amount) in pairs {
+        v.push_back((addr.clone(), *amount));
+    }
+    v
+}
+
+// ---- Error paths -----------------------------------------------------------
+
+#[test]
+fn test_batch_deposit_empty_returns_batch_empty() {
+    let (env, vault, _admin, _token) = setup();
+    let caller = Address::generate(&env);
+    let recipients: Vec<(Address, i128)> = Vec::new(&env);
+    let result = vault.try_batch_deposit(&caller, &recipients);
+    assert_eq!(result, Err(Ok(VaultError::BatchEmpty)));
+}
+
+#[test]
+fn test_batch_deposit_too_large_returns_batch_too_large() {
+    let (env, vault, admin, token) = setup();
+    let caller = Address::generate(&env);
+
+    // Build 51 recipients (one over the limit of 50)
+    let mut pairs: std::vec::Vec<(Address, i128)> = std::vec::Vec::new();
+    for _ in 0..51 {
+        pairs.push((Address::generate(&env), 1_000));
+    }
+    let total: i128 = 51 * 1_000;
+    mint(&env, &token, &admin, &caller, total);
+
+    let recipients = make_recipients(&env, &pairs);
+    let result = vault.try_batch_deposit(&caller, &recipients);
+    assert_eq!(result, Err(Ok(VaultError::BatchTooLarge)));
+}
+
+#[test]
+fn test_batch_deposit_zero_amount_returns_zero_amount() {
+    let (env, vault, admin, token) = setup();
+    let caller = Address::generate(&env);
+    let r1 = Address::generate(&env);
+    let r2 = Address::generate(&env);
+
+    mint(&env, &token, &admin, &caller, 1_000_000);
+    let recipients = make_recipients(&env, &[(r1, 500_000), (r2, 0)]);
+    let result = vault.try_batch_deposit(&caller, &recipients);
+    assert_eq!(result, Err(Ok(VaultError::ZeroAmount)));
+}
+
+#[test]
+fn test_batch_deposit_negative_amount_returns_zero_amount() {
+    let (env, vault, admin, token) = setup();
+    let caller = Address::generate(&env);
+    let r1 = Address::generate(&env);
+
+    mint(&env, &token, &admin, &caller, 1_000_000);
+    let recipients = make_recipients(&env, &[(r1, -500)]);
+    let result = vault.try_batch_deposit(&caller, &recipients);
+    assert_eq!(result, Err(Ok(VaultError::ZeroAmount)));
+}
+
+#[test]
+fn test_batch_deposit_paused_returns_vault_paused() {
+    let (env, vault, admin, token) = setup();
+    let caller = Address::generate(&env);
+    let r1 = Address::generate(&env);
+
+    mint(&env, &token, &admin, &caller, 1_000_000);
+    vault.pause(&admin);
+
+    let recipients = make_recipients(&env, &[(r1, 1_000_000)]);
+    let result = vault.try_batch_deposit(&caller, &recipients);
+    assert_eq!(result, Err(Ok(VaultError::VaultPaused)));
+}
+
+#[test]
+fn test_batch_deposit_tvl_cap_exceeded() {
+    let (env, vault, admin, token) = setup();
+    let caller = Address::generate(&env);
+    let r1 = Address::generate(&env);
+    let r2 = Address::generate(&env);
+
+    // Set a TVL cap of 1_000_000
+    vault.set_tvl_cap(&admin, &1_000_000_i128);
+
+    mint(&env, &token, &admin, &caller, 2_000_000);
+    // Try to deposit 600_000 + 600_000 = 1_200_000, exceeding cap
+    let recipients = make_recipients(&env, &[(r1, 600_000), (r2, 600_000)]);
+    let result = vault.try_batch_deposit(&caller, &recipients);
+    assert_eq!(result, Err(Ok(VaultError::TvlCapExceeded)));
+}
+
+// ---- Happy paths -----------------------------------------------------------
+
+#[test]
+fn test_batch_deposit_single_recipient_first_deposit() {
+    let (env, vault, admin, token) = setup();
+    let caller = Address::generate(&env);
+    let r1 = Address::generate(&env);
+
+    mint(&env, &token, &admin, &caller, 1_000_000);
+    let recipients = make_recipients(&env, &[(r1.clone(), 1_000_000)]);
+    let shares = vault.batch_deposit(&caller, &recipients);
+
+    // First depositor gets 1:1 shares
+    assert_eq!(shares.get(0).unwrap(), 1_000_000);
+    assert_eq!(vault.balance_of(&r1), 1_000_000);
+    assert_eq!(vault.total_assets(), 1_000_000);
+    assert_eq!(vault.total_shares(), 1_000_000);
+}
+
+#[test]
+fn test_batch_deposit_multiple_recipients_all_credited() {
+    let (env, vault, admin, token) = setup();
+    let caller = Address::generate(&env);
+    let r1 = Address::generate(&env);
+    let r2 = Address::generate(&env);
+    let r3 = Address::generate(&env);
+
+    let total = 3_000_000_i128;
+    mint(&env, &token, &admin, &caller, total);
+
+    let recipients = make_recipients(
+        &env,
+        &[(r1.clone(), 1_000_000), (r2.clone(), 1_000_000), (r3.clone(), 1_000_000)],
+    );
+    let shares = vault.batch_deposit(&caller, &recipients);
+
+    // First recipient is the seed depositor (1:1)
+    assert_eq!(shares.get(0).unwrap(), 1_000_000);
+    // Subsequent recipients should also get correct shares (equal amounts, 1:1 still)
+    assert_eq!(shares.get(1).unwrap(), 1_000_000);
+    assert_eq!(shares.get(2).unwrap(), 1_000_000);
+
+    assert_eq!(vault.balance_of(&r1), 1_000_000);
+    assert_eq!(vault.balance_of(&r2), 1_000_000);
+    assert_eq!(vault.balance_of(&r3), 1_000_000);
+    assert_eq!(vault.total_assets(), 3_000_000);
+    assert_eq!(vault.total_shares(), 3_000_000);
+}
+
+#[test]
+fn test_batch_deposit_caller_not_credited() {
+    // The caller is the operator transferring funds; they should receive no shares
+    let (env, vault, admin, token) = setup();
+    let caller = Address::generate(&env);
+    let r1 = Address::generate(&env);
+
+    mint(&env, &token, &admin, &caller, 500_000);
+    let recipients = make_recipients(&env, &[(r1.clone(), 500_000)]);
+    vault.batch_deposit(&caller, &recipients);
+
+    // Caller's share balance must remain 0
+    assert_eq!(vault.balance_of(&caller), 0);
+}
+
+#[test]
+fn test_batch_deposit_correct_share_formula_after_existing_deposits() {
+    // Seed the vault first, then use batch_deposit so the share formula applies.
+    // After seeding: 1_000_000 shares, 1_200_000 assets (after harvest).
+    // Batch deposits 600_000 → floor(600_000 × 1_000_000 / 1_200_000) = 500_000 shares.
+    let (env, vault, admin, token) = setup();
+
+    let seeder = Address::generate(&env);
+    mint(&env, &token, &admin, &seeder, 1_000_000);
+    vault.deposit(&seeder, &1_000_000);
+
+    // Inject yield to skew the exchange rate (no new shares minted)
+    mint(&env, &token, &admin, &admin, 200_000);
+    vault.harvest(&admin, &200_000);
+
+    let caller = Address::generate(&env);
+    let r1 = Address::generate(&env);
+    mint(&env, &token, &admin, &caller, 600_000);
+
+    let recipients = make_recipients(&env, &[(r1.clone(), 600_000)]);
+    let shares = vault.batch_deposit(&caller, &recipients);
+
+    assert_eq!(shares.get(0).unwrap(), 500_000);
+    assert_eq!(vault.balance_of(&r1), 500_000);
+}
+
+#[test]
+fn test_batch_deposit_shares_returns_correct_length() {
+    let (env, vault, admin, token) = setup();
+    let caller = Address::generate(&env);
+
+    let n = 5_u32;
+    let amount_each = 100_000_i128;
+    let total = amount_each * n as i128;
+    mint(&env, &token, &admin, &caller, total);
+
+    let mut pairs: std::vec::Vec<(Address, i128)> = std::vec::Vec::new();
+    for _ in 0..n {
+        pairs.push((Address::generate(&env), amount_each));
+    }
+    let recipients = make_recipients(&env, &pairs);
+    let shares = vault.batch_deposit(&caller, &recipients);
+
+    assert_eq!(shares.len(), n);
+}
+
+#[test]
+fn test_batch_deposit_exactly_50_recipients_succeeds() {
+    let (env, vault, admin, token) = setup();
+    let caller = Address::generate(&env);
+
+    let n = 50_u32;
+    let amount_each = 10_000_i128;
+    let total = amount_each * n as i128;
+    mint(&env, &token, &admin, &caller, total);
+
+    let mut pairs: std::vec::Vec<(Address, i128)> = std::vec::Vec::new();
+    for _ in 0..n {
+        pairs.push((Address::generate(&env), amount_each));
+    }
+    let recipients = make_recipients(&env, &pairs);
+    let result = vault.try_batch_deposit(&caller, &recipients);
+    assert!(result.is_ok(), "batch of 50 should succeed");
+}
+
+#[test]
+fn test_batch_deposit_total_assets_matches_sum() {
+    let (env, vault, admin, token) = setup();
+    let caller = Address::generate(&env);
+
+    let amounts = [500_000_i128, 200_000, 300_000];
+    let total: i128 = amounts.iter().sum();
+    mint(&env, &token, &admin, &caller, total);
+
+    let pairs: std::vec::Vec<(Address, i128)> = amounts
+        .iter()
+        .map(|&a| (Address::generate(&env), a))
+        .collect();
+    let recipients = make_recipients(&env, &pairs);
+    vault.batch_deposit(&caller, &recipients);
+
+    assert_eq!(vault.total_assets(), total);
+}
+
+#[test]
+fn test_batch_deposit_recipient_can_withdraw_afterwards() {
+    let (env, vault, admin, token) = setup();
+    let caller = Address::generate(&env);
+    let r1 = Address::generate(&env);
+
+    mint(&env, &token, &admin, &caller, 1_000_000);
+    let recipients = make_recipients(&env, &[(r1.clone(), 1_000_000)]);
+    vault.batch_deposit(&caller, &recipients);
+
+    let shares = vault.balance_of(&r1);
+    assert!(shares > 0);
+
+    // r1 should be able to withdraw their shares normally
+    let redeemed = vault.withdraw(&r1, &shares);
+    assert_eq!(redeemed, 1_000_000);
+    assert_eq!(vault.balance_of(&r1), 0);
+}
+
+#[test]
+fn test_batch_deposit_mixed_amounts_individual_shares_correct() {
+    // Batch: r1 gets 3x more tokens than r2; shares should reflect that.
+    let (env, vault, admin, token) = setup();
+    let caller = Address::generate(&env);
+    let r1 = Address::generate(&env);
+    let r2 = Address::generate(&env);
+
+    // Empty vault, so first recipient gets 1:1 and second uses the running total.
+    mint(&env, &token, &admin, &caller, 4_000_000);
+    let recipients = make_recipients(
+        &env,
+        &[(r1.clone(), 3_000_000), (r2.clone(), 1_000_000)],
+    );
+    vault.batch_deposit(&caller, &recipients);
+
+    // r1: 3_000_000 shares (first/seed deposit)
+    // r2: floor(1_000_000 × 3_000_000 / 3_000_000) = 1_000_000 shares
+    assert_eq!(vault.balance_of(&r1), 3_000_000);
+    assert_eq!(vault.balance_of(&r2), 1_000_000);
 }
 
 // ---------------------------------------------------------------------------

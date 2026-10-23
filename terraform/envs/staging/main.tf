@@ -33,6 +33,15 @@ terraform {
 
 provider "aws" {
   region = var.aws_region
+  default_tags {
+    tags = {
+      Project     = "aura-vault-protocol"
+      Environment = "staging"
+      Component   = "database"
+      ManagedBy   = "terraform"
+      CostCenter  = "platform"
+    }
+  }
 }
 
 # ---------------------------------------------------------------------------
@@ -42,7 +51,7 @@ data "terraform_remote_state" "root" {
   backend = "s3"
   config = {
     bucket = "aura-vault-terraform-state"
-    key    = "terraform.tfstate"
+    key    = "infrastructure/terraform.tfstate"
     region = "us-east-1"
   }
 }

@@ -188,13 +188,13 @@ pub enum VaultError {
     /// **Resolution:** Wait for the timelock period to expire, then retry.
     TimelockNotExpired = 13,
 
-    /// A governance proposal has not received enough approval votes to execute.
+    /// An address or governance action has not been approved.
     ///
-    /// **Trigger:** `execute(proposal_id)` called on a proposal that has not
-    /// yet reached the required signature threshold.
+    /// **Trigger:** A deposit is attempted by an address not approved for KYC
+    /// mode, or a governance proposal has not reached its signature threshold.
     ///
-    /// **Resolution:** Collect more approval votes from whitelisted signers
-    /// before executing.
+    /// **Resolution:** Obtain allowlist approval or collect more governance
+    /// signatures, as applicable.
     NotApproved = 14,
 
     /// This signer has already voted on this governance proposal.
@@ -298,6 +298,10 @@ pub enum VaultError {
     ThresholdNotMet        = 40,
     /// The provided signer threshold is invalid for the current signer set.
     InvalidThreshold       = 41,
+    /// A configured swap returned fewer underlying tokens than the minimum.
+    DexSlippageExceeded    = 42,
+    /// No DEX router has been configured by the vault administrator.
+    DexNotConfigured       = 43,
 }
 
 impl VaultError {
@@ -317,7 +321,7 @@ impl VaultError {
             VaultError::VaultPaused => "Vault is paused",
             VaultError::BalanceMismatch => "Token balance mismatch (flash-loan guard tripped)",
             VaultError::TimelockNotExpired => "Governance timelock has not expired",
-            VaultError::NotApproved => "Governance proposal not approved",
+            VaultError::NotApproved => "Address or governance action is not approved",
             VaultError::AlreadyVoted => "Signer has already voted on this proposal",
             VaultError::TvlCapExceeded => "Deposit exceeds vault TVL cap",
             VaultError::YieldTooSmall => "Yield amount is too small to distribute",
@@ -345,6 +349,8 @@ impl VaultError {
             VaultError::OperationAlreadySigned => "Signer has already signed this operation",
             VaultError::ThresholdNotMet => "Operation signature threshold has not been met",
             VaultError::InvalidThreshold => "Invalid multi-sig threshold",
+            VaultError::DexSlippageExceeded => "DEX swap output is below the required minimum",
+            VaultError::DexNotConfigured => "DEX router has not been configured",
         }
     }
 }

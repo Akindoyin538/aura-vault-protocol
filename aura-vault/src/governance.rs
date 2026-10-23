@@ -22,6 +22,29 @@ use crate::storage::{
     MULTISIG_EXPIRY_SECS,
 };
 
+/// Minimum number of distinct signers required to change the KYC allowlist mode.
+pub const ALLOWLIST_REQUIRED_SIGNATURES: u32 = 3;
+/// Minimum delay before a KYC allowlist mode change can execute.
+pub const ALLOWLIST_TIMELOCK_SECS: u64 = 24 * 60 * 60;
+
+fn is_allowlist_mode_update(env: &Env, op_type: &OpType) -> bool {
+    match op_type {
+        OpType::UpdateParameter(name, _) => {
+            *name == Symbol::new(env, "set_allowlist_enabled")
+        }
+        _ => false,
+    }
+}
+
+fn required_signatures(env: &Env, op_type: &OpType) -> u32 {
+    let threshold = get_multisig_threshold(env);
+    if is_allowlist_mode_update(env, op_type) {
+        threshold.max(ALLOWLIST_REQUIRED_SIGNATURES)
+    } else {
+        threshold
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Operation type — Soroban contracttype requires simple (tuple) variants
 // ---------------------------------------------------------------------------
@@ -92,6 +115,32 @@ pub struct MultiSigOp {
     pub expires_at: u64,
 }
 
+/// A stable, read-only projection of a governance operation for clients.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct ProposalView {
+    pub id: u64,
+    /// Operation variant and its encoded parameters.
+    pub action: OpType,
+    pub proposer: Address,
+    pub votes: u32,
+    pub threshold: u32,
+    pub status: ProposalViewStatus,
+    /// The operation can be executed immediately once it reaches the threshold.
+    /// Pending operations have no executable time yet.
+    pub executable_at: Option<u64>,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub enum ProposalViewStatus {
+    Pending,
+    TimelockActive,
+    Executable,
+    Executed,
+    Expired,
+}
+
 // ---------------------------------------------------------------------------
 // Storage key for a MultiSigOp (separate from DataKey to avoid naming conflict)
 // ---------------------------------------------------------------------------
@@ -145,7 +194,7 @@ pub fn propose_operation(
     let mut initial_signers = Vec::new(env);
     initial_signers.push_back(proposer.clone());
 
-    let threshold = get_multisig_threshold(env);
+    let threshold = required_signatures(env, &op_type);
     let status = if 1 >= threshold {
         OpStatus::Ready
     } else {
@@ -217,7 +266,7 @@ pub fn sign_operation(
     op.signers.push_back(signer.clone());
     record_multisig_vote(env, op_id, &signer);
 
-    let threshold = get_multisig_threshold(env);
+    let threshold = required_signatures(env, &op.op_type);
     if op.sig_count >= threshold {
         op.status = OpStatus::Ready;
     }
@@ -270,6 +319,18 @@ pub fn execute_multisig_op(
         OpStatus::Ready    => {}
     }
 
+    if is_allowlist_mode_update(env, &op.op_type) {
+        // The operation may have reached Ready under an earlier threshold.
+        // Re-evaluate the current governance threshold at execution time so a
+        // later threshold increase cannot be bypassed by a stale Ready status.
+        if op.sig_count < required_signatures(env, &op.op_type) {
+            return Err(VaultError::ThresholdNotMet);
+        }
+        if now < op.proposed_at + ALLOWLIST_TIMELOCK_SECS {
+            return Err(VaultError::TimelockNotExpired);
+        }
+    }
+
     op.status = OpStatus::Executed;
     set_op(env, op_id, &op);
 
@@ -297,6 +358,50 @@ pub fn get_operation_status(env: &Env, op_id: u64) -> Option<OpStatus> {
 /// Return the full operation record.
 pub fn get_operation(env: &Env, op_id: u64) -> Option<MultiSigOp> {
     get_op(env, op_id)
+}
+
+/// Return one proposal in the frontend-friendly view format.
+pub fn get_proposal_view(env: &Env, id: u64) -> Option<ProposalView> {
+    let op = get_op(env, id)?;
+    let now = env.ledger().timestamp();
+    let status = if matches!(op.status, OpStatus::Pending | OpStatus::Ready) && now > op.expires_at {
+        ProposalViewStatus::Expired
+    } else {
+        match op.status {
+            OpStatus::Pending => ProposalViewStatus::Pending,
+            OpStatus::Ready => ProposalViewStatus::Executable,
+            OpStatus::Executed => ProposalViewStatus::Executed,
+            OpStatus::Expired => ProposalViewStatus::Expired,
+        }
+    };
+    let executable_at = if matches!(&status, ProposalViewStatus::Executable) {
+        Some(now)
+    } else {
+        None
+    };
+    Some(ProposalView {
+        id: op.id,
+        action: op.op_type,
+        proposer: op.proposer,
+        votes: op.sig_count,
+        threshold: get_multisig_threshold(env),
+        status,
+        executable_at,
+    })
+}
+
+/// Return every non-expired proposal in creation order.
+pub fn get_proposal_views(env: &Env) -> Vec<ProposalView> {
+    let mut views = Vec::new(env);
+    let count = get_multisig_op_count(env);
+    for id in 1..=count {
+        if let Some(view) = get_proposal_view(env, id) {
+            if !matches!(&view.status, ProposalViewStatus::Expired) {
+                views.push_back(view);
+            }
+        }
+    }
+    views
 }
 
 // ---------------------------------------------------------------------------
@@ -404,9 +509,9 @@ pub fn execute_proposal(
     env: &Env,
     executor: Address,
     proposal_id: u64,
-) -> Result<(), VaultError> {
-    execute_multisig_op(env, executor, proposal_id)?;
-    Ok(())
+) -> Result<ProposalType, VaultError> {
+    let executed = execute_multisig_op(env, executor, proposal_id)?;
+    Ok(executed.op_type)
 }
 
 pub fn get_proposal_status(env: &Env, proposal_id: u64) -> Option<ProposalStatus> {
