@@ -114,7 +114,7 @@ fn gas_deposit() {
     mint(&env, &token, &admin, &user, 1_000_000);
 
     measure(&env, "deposit", || {
-        vault.deposit(&user, &1_000_000);
+        vault.deposit(&user, &1_000_000, &None);
     });
 }
 
@@ -123,7 +123,7 @@ fn gas_withdraw() {
     let (env, vault, admin, token) = setup();
     let user = Address::generate(&env);
     mint(&env, &token, &admin, &user, 1_000_000);
-    vault.deposit(&user, &1_000_000);
+    vault.deposit(&user, &1_000_000, &None);
     let shares = vault.balance_of(&user);
 
     measure(&env, "withdraw", || {
@@ -137,7 +137,7 @@ fn gas_harvest() {
     // Need at least one depositor so total_shares > 0.
     let depositor = Address::generate(&env);
     mint(&env, &token, &admin, &depositor, 1_000_000);
-    vault.deposit(&depositor, &1_000_000);
+    vault.deposit(&depositor, &1_000_000, &None);
 
     let keeper = Address::generate(&env);
     mint(&env, &token, &admin, &keeper, 500_000);
@@ -159,7 +159,7 @@ fn gas_harvest_token() {
     // Seed depositor.
     let depositor = Address::generate(&env);
     mint(&env, &token, &admin, &depositor, 1_000_000);
-    vault.deposit(&depositor, &1_000_000);
+    vault.deposit(&depositor, &1_000_000, &None);
 
     // Give keeper alt tokens.
     let keeper = Address::generate(&env);
@@ -239,7 +239,7 @@ fn gas_withdraw_fees() {
 
     let depositor = Address::generate(&env);
     mint(&env, &token, &admin, &depositor, 1_000_000);
-    vault.deposit(&depositor, &1_000_000);
+    vault.deposit(&depositor, &1_000_000, &None);
 
     let keeper = Address::generate(&env);
     mint(&env, &token, &admin, &keeper, 100_000);
@@ -276,4 +276,31 @@ fn gas_balance_of() {
     measure(&env, "balance_of", || {
         let _ = vault.balance_of(&user);
     });
+}
+
+#[test]
+fn gas_regression_vault_state_storage_reduction() {
+    let (env, vault, admin, token) = setup();
+    let user = Address::generate(&env);
+    mint(&env, &token, &admin, &user, 1_000_000);
+
+    // Verify batched VaultState storage reads reduce/maintain CPU instructions vs baseline
+    env.cost_estimate().budget().reset_default();
+    vault.deposit(&user, &1_000_000);
+    let deposit_cpu = env.cost_estimate().budget().cpu_instruction_cost();
+    assert!(
+        deposit_cpu <= 4_675_000,
+        "Deposit CPU cost ({}) exceeded baseline (4675000)",
+        deposit_cpu
+    );
+
+    let shares = vault.balance_of(&user);
+    env.cost_estimate().budget().reset_default();
+    vault.withdraw(&user, &shares);
+    let withdraw_cpu = env.cost_estimate().budget().cpu_instruction_cost();
+    assert!(
+        withdraw_cpu <= 5_800_000,
+        "Withdraw CPU cost ({}) exceeded baseline (5800000)",
+        withdraw_cpu
+    );
 }

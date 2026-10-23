@@ -1,117 +1,40 @@
 "use client";
 
-import { PortfolioExportButton } from "@/components/PortfolioExportButton";
-import type { ExportTransaction, PortfolioPosition } from "@/lib/portfolioExport";
-// ── Demo / mock data ──────────────────────────────────────────────────────────
-// Replace with real data from your Soroban RPC / backend API calls.
-const DEMO_ADDRESS = "GAURA1234567890EXAMPLEADDRESSXYZ";
-const DEMO_POSITION: PortfolioPosition = {
-  shares: "998.50",
-  underlyingBalance: "1 053.20",
-  pricePerShare: "1.0548",
-  apy: "8.5",
-  yieldEarned: "53.20",
-};
-const DEMO_TRANSACTIONS: ExportTransaction[] = [
-  {
-    date: "2024-03-15T10:22:00Z",
-    type: "deposit",
-    amount: "500.00",
-    shares: "500.00",
-    txHash: "abc123def456abc123def456abc123def456abc123def456abc123def456abc1",
-    priceAtTime: "1.0000",
-  },
-    date: "2024-03-20T14:05:30Z",
-    shares: "498.50",
-    txHash: "bcd234efa567bcd234efa567bcd234efa567bcd234efa567bcd234efa567bcd2",
-    priceAtTime: "1.0030",
-    date: "2024-04-01T08:00:00Z",
-    type: "harvest",
-    amount: "53.20",
-    shares: "0.00",
-    txHash: "cde345fgb678cde345fgb678cde345fgb678cde345fgb678cde345fgb678cde3",
-    priceAtTime: "1.0548",
-];
-// ── Component ─────────────────────────────────────────────────────────────────
-/**
- * `PortfolioPanel`
- *
- * Displays the user's current vault position summary and provides a CSV / JSON
- * export button for tax-reporting purposes.
- * All file generation is client-side — no server round-trip — per Issue #260.
- */
-export default function PortfolioPanel() {
-  return (
-    <section
-      aria-labelledby="portfolio-heading"
-      className="flex flex-col gap-6 rounded-2xl border border-zinc-200 bg-white p-6 dark:border-zinc-700 dark:bg-zinc-900"
-    >
-      <div>
-        <h2
-          id="portfolio-heading"
-          className="text-lg font-semibold text-zinc-900 dark:text-zinc-50"
-        >
-          Portfolio
-        </h2>
-        <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
-          Your current Aura Vault position and full transaction history.
-        </p>
-      </div>
-      {/* Position stats */}
-      <dl className="grid grid-cols-2 gap-4 sm:grid-cols-3">
-        {[
-          { label: "Shares",            value: DEMO_POSITION.shares },
-          { label: "Underlying balance",value: DEMO_POSITION.underlyingBalance },
-          { label: "Price / share",     value: DEMO_POSITION.pricePerShare },
-          { label: "APY",               value: `${DEMO_POSITION.apy}%` },
-          { label: "Yield earned",      value: DEMO_POSITION.yieldEarned },
-        ].map(({ label, value }) => (
-          <div
-            key={label}
-            className="flex flex-col gap-0.5 rounded-xl border border-zinc-100 p-3 dark:border-zinc-800"
-          >
-            <dt className="text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
-              {label}
-            </dt>
-            <dd className="font-mono text-sm font-semibold text-zinc-900 dark:text-zinc-50">
-              {value}
-            </dd>
-          </div>
-        ))}
-      </dl>
-      {/* Transaction count */}
-      <p className="text-sm text-zinc-500 dark:text-zinc-400">
-        {DEMO_TRANSACTIONS.length} transaction{DEMO_TRANSACTIONS.length !== 1 ? "s" : ""} available for export.
-      </p>
-      {/* Export */}
-      <div className="border-t border-zinc-100 pt-4 dark:border-zinc-800">
-        <p className="mb-3 text-sm font-medium text-zinc-700 dark:text-zinc-300">
-          Download for tax reporting
-        <PortfolioExportButton
-          walletAddress={DEMO_ADDRESS}
-          network="mainnet"
-          position={DEMO_POSITION}
-          transactions={DEMO_TRANSACTIONS}
-        />
 import { useState, useCallback } from "react";
-import useSWR from "swr";
+import useSWR, { mutate as globalMutate } from "swr";
 import { Download, ChevronLeft, ChevronRight, RefreshCw, Wallet } from "lucide-react";
 import { useWalletStore } from "@/lib/walletStore";
 import CopyButton from "./CopyButton";
+
 // ── Types ──────────────────────────────────────────────────────────────────
 interface PortfolioData {
-  shareBalance: string;    // raw integer string
-  totalAssets: string;     // vault-wide total assets
-  totalShares: string;     // vault-wide total shares
+  shareBalance: string;
+  totalAssets: string;
+  totalShares: string;
 }
+
 interface TxEntry {
   id: string;
   type: "deposit" | "withdraw" | "harvest";
   amount: string;
   shares: string;
-  timestamp: string;       // ISO string
+  timestamp: string;
   txHash: string;
+}
+
 const TX_PAGE_SIZE = 10;
+
+// ── Cache invalidation helper ──────────────────────────────────────────────
+/**
+ * Invalidates the portfolio SWR cache for the given address.
+ * Call this after a successful deposit or withdrawal to trigger
+ * an automatic refresh of the portfolio panel (#886).
+ */
+export function invalidatePortfolioCache(address: string): void {
+  void globalMutate(`portfolio-${address}`);
+  void globalMutate(`history-${address}`);
+}
+
 // ── Fetchers ───────────────────────────────────────────────────────────────
 async function fetchPortfolio(address: string): Promise<PortfolioData> {
   const [balanceRes, assetsRes] = await Promise.all([
@@ -120,7 +43,6 @@ async function fetchPortfolio(address: string): Promise<PortfolioData> {
   ]);
   const balance = balanceRes.ok ? await balanceRes.json() : {};
   const assets = assetsRes.ok ? await assetsRes.json() : {};
-  // total_shares may come from either endpoint
   const totalShares =
     balance.totalShares ?? assets.totalShares ?? balance.balance ?? "1";
   return {
@@ -128,6 +50,8 @@ async function fetchPortfolio(address: string): Promise<PortfolioData> {
     totalAssets: assets.total ?? assets.totalAssets ?? "0",
     totalShares,
   };
+}
+
 async function fetchHistory(address: string): Promise<TxEntry[]> {
   const res = await fetch(
     `/api/vault/history?address=${encodeURIComponent(address)}`
@@ -135,6 +59,8 @@ async function fetchHistory(address: string): Promise<TxEntry[]> {
   if (!res.ok) return [];
   const data = await res.json();
   return Array.isArray(data) ? data : (data.transactions ?? []);
+}
+
 // ── Helpers ────────────────────────────────────────────────────────────────
 function formatAmount(raw: string): string {
   try {
@@ -145,23 +71,30 @@ function formatAmount(raw: string): string {
   } catch {
     return raw;
   }
-/** Calculate redemption value: shares × (totalAssets / totalShares) */
+}
+
 function calcRedemptionValue(
   shareBalance: string,
   totalAssets: string,
   totalShares: string
 ): string {
+  try {
     const shares = BigInt(shareBalance);
     const assets = BigInt(totalAssets);
     const supply = BigInt(totalShares);
     if (supply === 0n || shares === 0n) return "0.00";
     const value = (shares * assets) / supply;
     return formatAmount(value.toString());
+  } catch {
     return "0.00";
+  }
+}
+
 function exportTxCsv(txs: TxEntry[], address: string): void {
   const header = "id,type,amount,shares,timestamp,txHash";
   const rows = txs.map(
     (t) => `${t.id},${t.type},${t.amount},${t.shares},${t.timestamp},${t.txHash}`
+  );
   const csv = [header, ...rows].join("\n");
   const blob = new Blob([csv], { type: "text/csv" });
   const url = URL.createObjectURL(blob);
@@ -172,11 +105,16 @@ function exportTxCsv(txs: TxEntry[], address: string): void {
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
+}
+
 function truncateHash(hash: string): string {
   if (hash.length <= 12) return hash;
   return `${hash.slice(0, 6)}…${hash.slice(-6)}`;
+}
+
 // ── Sub-components ─────────────────────────────────────────────────────────
 function SkeletonRow() {
+  return (
     <tr>
       {[1, 2, 3, 4, 5].map((i) => (
         <td key={i} className="px-3 py-3">
@@ -184,39 +122,86 @@ function SkeletonRow() {
         </td>
       ))}
     </tr>
+  );
+}
+
 // ── Main Component ─────────────────────────────────────────────────────────
+export default function PortfolioPanel() {
   const { address, connected } = useWalletStore();
   const [txPage, setTxPage] = useState(0);
-  // Don't render if wallet isn't connected
+
   if (!connected || !address) {
-    return null;
+    return (
+      <section
+        aria-label="Portfolio"
+        className="w-full rounded-xl border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 p-5 flex flex-col items-center gap-4 text-center"
+        data-cy="portfolio-connect-prompt"
+      >
+        <div className="rounded-full bg-zinc-100 dark:bg-zinc-800 p-4">
+          <Wallet size={24} className="text-zinc-400" aria-hidden="true" />
+        </div>
+        <div>
+          <h2 className="text-base font-semibold text-zinc-900 dark:text-zinc-100 mb-1">
+            Your Portfolio
+          </h2>
+          <p className="text-sm text-zinc-500 dark:text-zinc-400 max-w-xs">
+            Connect your wallet to view your share balance, position value, and
+            transaction history.
+          </p>
+        </div>
+      </section>
+    );
+  }
+
   return <PortfolioPanelInner address={address} txPage={txPage} setTxPage={setTxPage} />;
+}
+
 interface InnerProps {
   address: string;
   txPage: number;
   setTxPage: (page: number) => void;
+}
+
 function PortfolioPanelInner({ address, txPage, setTxPage }: InnerProps) {
   const portfolioKey = `portfolio-${address}`;
   const historyKey = `history-${address}`;
+
   const {
     data: portfolio,
     isLoading: portfolioLoading,
+    isValidating: portfolioValidating,
     error: portfolioError,
     mutate: mutatePortfolio,
   } = useSWR<PortfolioData>(portfolioKey, () => fetchPortfolio(address), {
     refreshInterval: 30_000,
     revalidateOnFocus: false,
+    keepPreviousData: true,
   });
+
+  const {
     data: history = [],
     isLoading: historyLoading,
   } = useSWR<TxEntry[]>(historyKey, () => fetchHistory(address), {
+    refreshInterval: 30_000,
+    revalidateOnFocus: false,
+    keepPreviousData: true,
+  });
+
   const refresh = useCallback(() => {
     mutatePortfolio();
   }, [mutatePortfolio]);
+
+  // portfolioValidating is true during background revalidation (e.g. after
+  // invalidatePortfolioCache is called post-deposit). Show a spinner without
+  // hiding existing data (#886).
+  const isRefreshing = portfolioValidating && !portfolioLoading;
+
   const totalPages = Math.ceil(history.length / TX_PAGE_SIZE);
   const pageTxs = history.slice(
     txPage * TX_PAGE_SIZE,
     (txPage + 1) * TX_PAGE_SIZE
+  );
+
   const redemptionValue = portfolio
     ? calcRedemptionValue(
         portfolio.shareBalance,
@@ -224,7 +209,11 @@ function PortfolioPanelInner({ address, txPage, setTxPage }: InnerProps) {
         portfolio.totalShares
       )
     : null;
-  const hasPosition = portfolio ? BigInt(portfolio.shareBalance || "0") > 0n : false;
+
+  const hasPosition = portfolio
+    ? BigInt(portfolio.shareBalance || "0") > 0n
+    : false;
+
   // ── Portfolio error ──────────────────────────────────────────────────────
   if (portfolioError) {
     return (
@@ -235,28 +224,60 @@ function PortfolioPanelInner({ address, txPage, setTxPage }: InnerProps) {
       >
         <p className="text-sm text-red-600 dark:text-red-400 mb-3">
           Failed to load portfolio data.
+        </p>
         <button
           onClick={refresh}
           className="inline-flex items-center gap-1.5 rounded-lg bg-red-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-red-700 transition-colors"
           aria-label="Retry loading portfolio"
+        >
           <RefreshCw size={12} aria-hidden="true" /> Retry
         </button>
       </section>
     );
+  }
+
+  return (
+    <section
       aria-label="Your Portfolio"
       className="w-full rounded-xl border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 p-5 flex flex-col gap-5"
       data-cy="portfolio-panel"
+    >
       {/* ── Header ─────────────────────────────────────────────────────── */}
       <div className="flex items-center justify-between">
         <h2 className="flex items-center gap-2 text-base font-semibold text-zinc-900 dark:text-zinc-100">
           <Wallet size={16} aria-hidden="true" />
           Your Portfolio
-          disabled={portfolioLoading}
+          {/* Background-refresh spinner shown post-deposit (#886) */}
+          {isRefreshing && (
+            <span
+              className="ml-1 inline-flex items-center"
+              aria-label="Refreshing portfolio data"
+              role="status"
+            >
+              <RefreshCw
+                size={13}
+                className="animate-spin text-indigo-500"
+                aria-hidden="true"
+              />
+            </span>
+          )}
+        </h2>
+        <button
+          onClick={refresh}
+          disabled={portfolioLoading || portfolioValidating}
           className="inline-flex items-center gap-1.5 text-xs text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200 transition-colors disabled:opacity-50"
           aria-label="Refresh portfolio"
           data-cy="portfolio-refresh-btn"
-          <RefreshCw size={12} className={portfolioLoading ? "animate-spin" : ""} aria-hidden="true" />
+        >
+          <RefreshCw
+            size={12}
+            className={portfolioLoading || portfolioValidating ? "animate-spin" : ""}
+            aria-hidden="true"
+          />
           Refresh
+        </button>
+      </div>
+
       {/* ── Position stats ──────────────────────────────────────────────── */}
       {portfolioLoading ? (
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
@@ -272,35 +293,60 @@ function PortfolioPanelInner({ address, txPage, setTxPage }: InnerProps) {
         <div
           className="flex flex-col items-center gap-3 py-8 text-center"
           data-cy="portfolio-empty"
+        >
           <div className="rounded-full bg-zinc-100 dark:bg-zinc-800 p-4">
             <Wallet size={24} className="text-zinc-400" aria-hidden="true" />
+          </div>
           <p className="text-sm font-medium text-zinc-600 dark:text-zinc-400">
             No vault position yet
           </p>
           <p className="text-xs text-zinc-400 dark:text-zinc-500 max-w-xs">
             Deposit into the vault to start earning yield. Your share balance
             and redemption value will appear here.
+          </p>
+        </div>
       ) : (
         /* ── Position cards ─────────────────────────────────────────────── */
         <dl className="grid grid-cols-1 sm:grid-cols-3 gap-4">
           <div className="rounded-lg bg-zinc-50 dark:bg-zinc-800 p-4">
             <dt className="text-xs font-medium text-zinc-500 dark:text-zinc-400 uppercase tracking-wide mb-1">
               Share Balance
+            </dt>
             <dd
               data-cy="share-balance"
               className="font-mono text-xl font-bold text-zinc-900 dark:text-zinc-50"
             >
               {formatAmount(portfolio!.shareBalance)}
+            </dd>
+          </div>
+          <div className="rounded-lg bg-zinc-50 dark:bg-zinc-800 p-4">
+            <dt className="text-xs font-medium text-zinc-500 dark:text-zinc-400 uppercase tracking-wide mb-1">
               Current Value
+            </dt>
+            <dd
               data-cy="redemption-value"
+              className="font-mono text-xl font-bold text-zinc-900 dark:text-zinc-50"
+            >
               {redemptionValue}
+            </dd>
             <p className="text-xs text-zinc-400 mt-0.5">shares × (assets/supply)</p>
+          </div>
+          <div className="rounded-lg bg-zinc-50 dark:bg-zinc-800 p-4">
+            <dt className="text-xs font-medium text-zinc-500 dark:text-zinc-400 uppercase tracking-wide mb-1">
               Vault Total Assets
+            </dt>
+            <dd
               data-cy="total-assets-portfolio"
+              className="font-mono text-xl font-bold text-zinc-900 dark:text-zinc-50"
+            >
               {formatAmount(portfolio!.totalAssets)}
+            </dd>
+          </div>
         </dl>
       )}
+
       {/* ── Transaction history ──────────────────────────────────────────── */}
+      <div>
         <div className="flex items-center justify-between mb-3">
           <h3 className="text-sm font-semibold text-zinc-800 dark:text-zinc-200">
             Transaction History
@@ -311,10 +357,13 @@ function PortfolioPanelInner({ address, txPage, setTxPage }: InnerProps) {
               className="inline-flex items-center gap-1.5 text-xs text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200 transition-colors"
               aria-label="Export transaction history as CSV"
               data-cy="export-csv-btn"
+            >
               <Download size={12} aria-hidden="true" />
               Export CSV
             </button>
           )}
+        </div>
+
         {historyLoading ? (
           <div className="overflow-x-auto rounded-lg border border-zinc-200 dark:border-zinc-700">
             <table className="w-full text-sm" aria-label="Transaction history loading">
@@ -334,11 +383,14 @@ function PortfolioPanelInner({ address, txPage, setTxPage }: InnerProps) {
                 {[1, 2, 3].map((i) => <SkeletonRow key={i} />)}
               </tbody>
             </table>
+          </div>
         ) : history.length === 0 ? (
           <p
             className="text-sm text-zinc-400 dark:text-zinc-500 text-center py-6"
             data-cy="history-empty"
+          >
             No transactions found for this address.
+          </p>
         ) : (
           <>
             <div className="overflow-x-auto rounded-lg border border-zinc-200 dark:border-zinc-700">
@@ -365,6 +417,7 @@ function PortfolioPanelInner({ address, txPage, setTxPage }: InnerProps) {
                     <tr
                       key={tx.id}
                       className="hover:bg-zinc-50 dark:hover:bg-zinc-800/50 transition-colors"
+                    >
                       <td className="px-3 py-3">
                         <span
                           className={[
@@ -381,13 +434,18 @@ function PortfolioPanelInner({ address, txPage, setTxPage }: InnerProps) {
                       </td>
                       <td className="px-3 py-3 font-mono text-zinc-700 dark:text-zinc-300">
                         {formatAmount(tx.amount)}
+                      </td>
+                      <td className="px-3 py-3 font-mono text-zinc-700 dark:text-zinc-300">
                         {formatAmount(tx.shares)}
+                      </td>
                       <td className="px-3 py-3 text-zinc-500 dark:text-zinc-400 whitespace-nowrap">
                         {new Date(tx.timestamp).toLocaleDateString(undefined, {
                           month: "short",
                           day: "numeric",
                           year: "numeric",
                         })}
+                      </td>
+                      <td className="px-3 py-3">
                         <div className="flex items-center gap-1">
                           <span
                             className="font-mono text-xs text-zinc-500 dark:text-zinc-400"
@@ -401,14 +459,18 @@ function PortfolioPanelInner({ address, txPage, setTxPage }: InnerProps) {
                             data-cy="copy-tx-hash"
                           />
                         </div>
+                      </td>
                     </tr>
+                  ))}
                 </tbody>
               </table>
+            </div>
             {/* Pagination */}
             {totalPages > 1 && (
               <div
                 className="flex items-center justify-between mt-3 text-sm"
                 aria-label="Transaction history pagination"
+              >
                 <p className="text-xs text-zinc-500">
                   Page {txPage + 1} of {totalPages} ({history.length} total)
                 </p>
@@ -422,11 +484,15 @@ function PortfolioPanelInner({ address, txPage, setTxPage }: InnerProps) {
                   >
                     <ChevronLeft size={12} aria-hidden="true" /> Prev
                   </button>
+                  <button
                     onClick={() => setTxPage(Math.min(totalPages - 1, txPage + 1))}
                     disabled={txPage >= totalPages - 1}
+                    className="inline-flex items-center gap-1 rounded border border-zinc-200 dark:border-zinc-700 px-2.5 py-1 text-xs font-medium hover:bg-zinc-50 dark:hover:bg-zinc-800 disabled:opacity-40 transition-colors"
                     aria-label="Next page"
                     data-cy="pagination-next"
+                  >
                     Next <ChevronRight size={12} aria-hidden="true" />
+                  </button>
                 </div>
               </div>
             )}

@@ -1,19 +1,19 @@
-/// gas_regression.rs
-///
-/// Measures Soroban CPU instruction consumption for each tracked contract
-/// function and writes the results to gas-measurements.json in the workspace
-/// root.
-///
-/// Run via:
-///   cargo test --test gas_regression -- --nocapture
-///
-/// The file produced is then consumed by:
-///   node scripts/check-gas-regression.js \
-///     --baseline gas-baselines.json \
-///     --measured  gas-measurements.json
-///
-/// Functions tracked:
-///   initialize, deposit, withdraw, harvest, pause, unpause
+// gas_regression.rs
+//
+// Measures Soroban CPU instruction consumption for each tracked contract
+// function and writes the results to gas-measurements.json in the workspace
+// root.
+//
+// Run via:
+//   cargo test --test gas_regression -- --nocapture
+//
+// The file produced is then consumed by:
+//   node scripts/check-gas-regression.js \
+//     --baseline gas-baselines.json \
+//     --measured  gas-measurements.json
+//
+// Functions tracked:
+//   initialize, deposit, withdraw, harvest, pause, unpause
 
 #![cfg(test)]
 

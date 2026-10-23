@@ -20,7 +20,8 @@ import { userPreferencesRouter } from './userPreferencesRoutes.js';
 import { analyticsRouter } from './analyticsRoutes.js';
 import { alertsRouter } from './alertRoutes.js';
 import { stellarRouter } from './stellarRoutes.js';
-import { volumeRouter } from './volumeRoutes.js';
+// Issue #1267: Governance Dashboard
+import { governanceRouter } from './governanceRoutes.js';
 
 export const v1Router = Router();
 
@@ -40,3 +41,5 @@ v1Router.use('/analytics', analyticsRouter);
 // Issue #946: Alert subscription CRUD — auth applied inside the router
 v1Router.use('/alerts', alertsRouter);
 v1Router.use('/stellar', stellarRouter);
+// Issue #1267: Governance proposals — auth applied inside the router
+v1Router.use('/governance', governanceRouter);
