@@ -214,6 +214,30 @@ export const depositSimulateSchema = z.object({
 // User Preferences Schemas
 // ─────────────────────────────────────────────────────────────────────────────
 
+export const sharePriceAlertSchema = z.object({
+  id: z.string().optional(),
+  threshold: z.coerce
+    .number()
+    .min(1, "Threshold must be between 1% and 50%")
+    .max(50, "Threshold must be between 1% and 50%"),
+  direction: z.enum(["above", "below", "either"]),
+  channels: z
+    .array(z.enum(["toast", "email"]))
+    .min(1, "At least one channel is required")
+    .optional(),
+  channel: z
+    .union([
+      z.enum(["toast", "email", "both"]),
+      z.array(z.enum(["toast", "email"])),
+    ])
+    .optional(),
+  email: z.string().email().optional(),
+  initialPrice: z.number().optional(),
+  lastCheckedPrice: z.number().optional(),
+  active: z.boolean().optional(),
+  createdAt: z.string().optional(),
+});
+
 export const userPreferencesSchema = z.object({
   emailNotifications: z
     .boolean()
@@ -231,6 +255,11 @@ export const userPreferencesSchema = z.object({
     .enum(["USD", "EUR", "GBP", "JPY", "CNY"])
     .default("USD")
     .optional(),
+  default_history_range: z
+    .enum(["7d", "30d", "90d", "all"])
+    .default("30d")
+    .optional(),
+  priceAlerts: z.array(sharePriceAlertSchema).optional(),
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

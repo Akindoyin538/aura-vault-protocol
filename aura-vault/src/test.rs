@@ -2,11 +2,9 @@
 
 extern crate std;
 
-use soroban_sdk::{
-    testutils::{Address as _, Events as _, Ledger as _},
-    Address, Env, Symbol, TryFromVal, Vec,
-};
-use soroban_sdk::token::{StellarAssetClient, TokenClient};
+use soroban_sdk::testutils::Ledger as _;
+use soroban_sdk::token::StellarAssetClient;
+use soroban_sdk::{testutils::Address as _, Address, Env, Vec};
 
 use crate::{AuraVault, AuraVaultClient, VaultError};
 
@@ -21,7 +19,9 @@ fn setup() -> (Env, AuraVaultClient<'static>, Address, Address) {
     env.mock_all_auths();
 
     let admin = Address::generate(&env);
-    let token_address = env.register_stellar_asset_contract_v2(admin.clone()).address();
+    let token_address = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
 
     let vault_address = env.register_contract(None, AuraVault);
     let vault = AuraVaultClient::new(&env, &vault_address);
@@ -35,7 +35,13 @@ fn setup() -> (Env, AuraVaultClient<'static>, Address, Address) {
     (env, vault, admin, token_address)
 }
 
-fn setup_multisig() -> (Env, AuraVaultClient<'static>, std::vec::Vec<Address>, Address, Address) {
+fn setup_multisig() -> (
+    Env,
+    AuraVaultClient<'static>,
+    std::vec::Vec<Address>,
+    Address,
+    Address,
+) {
     let env = Env::default();
     env.mock_all_auths();
 
@@ -47,7 +53,9 @@ fn setup_multisig() -> (Env, AuraVaultClient<'static>, std::vec::Vec<Address>, A
         signers_sdk.push_back(s.clone());
     }
 
-    let token_address = env.register_stellar_asset_contract_v2(admin.clone()).address();
+    let token_address = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
     let vault_address = env.register_contract(None, AuraVault);
     let vault = AuraVaultClient::new(&env, &vault_address);
 
@@ -68,7 +76,7 @@ fn mint(env: &Env, token: &Address, admin: &Address, recipient: &Address, amount
 fn test_double_init_returns_already_initialized() {
     let (env, vault, admin, token) = setup();
     let signers: Vec<Address> = Vec::new(&env);
-    let result = vault.try_initialize(&admin, &token, &signers, &soroban_sdk::String::from_str(&env, "AuraVault"), &soroban_sdk::String::from_str(&env, "AURA"));
+    let result = vault.try_initialize(&admin, &token, &signers, &0_u32);
     assert_eq!(result, Err(Ok(VaultError::AlreadyInitialized)));
 }
 
@@ -94,7 +102,9 @@ fn test_deposit_before_init_returns_not_initialized() {
     let env = Env::default();
     env.mock_all_auths();
     let admin = Address::generate(&env);
-    let token = env.register_stellar_asset_contract_v2(admin.clone()).address();
+    let token = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
     let vault_addr = env.register_contract(None, AuraVault);
     let vault = AuraVaultClient::new(&env, &vault_addr);
     let user = Address::generate(&env);
@@ -262,7 +272,10 @@ fn test_share_precision_small_deposit_into_large_vault() {
 
     // Round-trip loss must be ≤ 1 stroop
     let received = vault.withdraw(&user, &minted);
-    assert!(received >= 6, "round-trip loss must be ≤ 1 stroop, got {received}");
+    assert!(
+        received >= 6,
+        "round-trip loss must be ≤ 1 stroop, got {received}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -282,7 +295,9 @@ fn test_withdraw_before_init_returns_not_initialized() {
     let env = Env::default();
     env.mock_all_auths();
     let admin = Address::generate(&env);
-    let _token = env.register_stellar_asset_contract_v2(admin.clone()).address();
+    let _token = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
     let vault_addr = env.register_contract(None, AuraVault);
     let vault = AuraVaultClient::new(&env, &vault_addr);
     let user = Address::generate(&env);
@@ -374,7 +389,9 @@ fn test_harvest_before_init_returns_not_initialized() {
     let env = Env::default();
     env.mock_all_auths();
     let admin = Address::generate(&env);
-    let _token = env.register_stellar_asset_contract_v2(admin.clone()).address();
+    let _token = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
     let vault_addr = env.register_contract(None, AuraVault);
     let vault = AuraVaultClient::new(&env, &vault_addr);
     let result = vault.try_harvest(&admin, &1_000);
@@ -422,9 +439,18 @@ fn test_pause_blocks_mutating_operations() {
     mint(&env, &token, &admin, &user, 1_000_000);
 
     vault.pause(&admin);
-    assert_eq!(vault.try_deposit(&user, &1_000_000), Err(Ok(VaultError::VaultPaused)));
-    assert_eq!(vault.try_withdraw(&user, &1), Err(Ok(VaultError::VaultPaused)));
-    assert_eq!(vault.try_harvest(&admin, &1_000), Err(Ok(VaultError::VaultPaused)));
+    assert_eq!(
+        vault.try_deposit(&user, &1_000_000),
+        Err(Ok(VaultError::VaultPaused))
+    );
+    assert_eq!(
+        vault.try_withdraw(&user, &1),
+        Err(Ok(VaultError::VaultPaused))
+    );
+    assert_eq!(
+        vault.try_harvest(&admin, &1_000),
+        Err(Ok(VaultError::VaultPaused))
+    );
 
     vault.unpause(&admin);
     vault.deposit(&user, &1_000_000);
@@ -472,7 +498,10 @@ fn test_withdraw_fees_transfers_to_treasury_and_resets_total_fees() {
     let withdrawn = vault.withdraw_fees(&admin);
     assert_eq!(withdrawn, 100_000);
     assert_eq!(vault.total_fees_collected(), 0);
-    assert_eq!(TokenClient::new(&env, &token).balance(&treasury), 100_000);
+    assert_eq!(
+        StellarAssetClient::new(&env, &token).balance(&treasury),
+        100_000
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -631,7 +660,10 @@ fn test_approval_with_three_votes() {
     vault.vote(&signers[2], &proposal_id, &true);
 
     let status = vault.proposal_status(&proposal_id);
-    assert_eq!(status, Some(soroban_sdk::String::from_str(&env, "Approved")));
+    assert_eq!(
+        status,
+        Some(soroban_sdk::String::from_str(&env, "Approved"))
+    );
 }
 
 #[test]
@@ -674,7 +706,13 @@ fn test_cannot_vote_twice() {
 // Multi-sig admin operations (Issue #375)
 // ===========================================================================
 
-fn setup_multisig_3of3() -> (Env, AuraVaultClient<'static>, std::vec::Vec<Address>, Address, Address) {
+fn setup_multisig_3of3() -> (
+    Env,
+    AuraVaultClient<'static>,
+    std::vec::Vec<Address>,
+    Address,
+    Address,
+) {
     let env = Env::default();
     env.mock_all_auths();
 
@@ -687,7 +725,9 @@ fn setup_multisig_3of3() -> (Env, AuraVaultClient<'static>, std::vec::Vec<Addres
         signers_sdk.push_back(s.clone());
     }
 
-    let token_address = env.register_stellar_asset_contract_v2(admin.clone()).address();
+    let token_address = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
     let vault_address = env.register_contract(None, AuraVault);
     let vault = AuraVaultClient::new(&env, &vault_address);
     vault.initialize(&admin, &token_address, &signers_sdk, &0_u32);
@@ -702,24 +742,16 @@ fn setup_multisig_3of3() -> (Env, AuraVaultClient<'static>, std::vec::Vec<Addres
 #[test]
 fn test_propose_operation_by_signer_returns_id() {
     let (env, vault, signers, _admin, _token) = setup_multisig_3of3();
-    let op_id = vault.propose_operation(
-        &signers[0],
-        &crate::governance::OpType::SetPerfFee(500_u32),
-    );
+    let op_id =
+        vault.propose_operation(&signers[0], &crate::governance::OpType::SetPerfFee(500_u32));
     assert_eq!(op_id, 1);
 }
 
 #[test]
 fn test_propose_operation_increments_id() {
     let (env, vault, signers, _admin, _token) = setup_multisig_3of3();
-    let id1 = vault.propose_operation(
-        &signers[0],
-        &crate::governance::OpType::SetPerfFee(500_u32),
-    );
-    let id2 = vault.propose_operation(
-        &signers[1],
-        &crate::governance::OpType::SetMgmtFee(50_u32),
-    );
+    let id1 = vault.propose_operation(&signers[0], &crate::governance::OpType::SetPerfFee(500_u32));
+    let id2 = vault.propose_operation(&signers[1], &crate::governance::OpType::SetMgmtFee(50_u32));
     assert_eq!(id1, 1);
     assert_eq!(id2, 2);
 }
@@ -728,20 +760,16 @@ fn test_propose_operation_increments_id() {
 fn test_propose_operation_by_non_signer_returns_not_a_signer() {
     let (env, vault, _signers, _admin, _token) = setup_multisig_3of3();
     let outsider = Address::generate(&env);
-    let result = vault.try_propose_operation(
-        &outsider,
-        &crate::governance::OpType::SetPerfFee(500_u32),
-    );
+    let result =
+        vault.try_propose_operation(&outsider, &crate::governance::OpType::SetPerfFee(500_u32));
     assert_eq!(result, Err(Ok(VaultError::NotASigner)));
 }
 
 #[test]
 fn test_propose_operation_status_is_pending_before_threshold() {
     let (env, vault, signers, _admin, _token) = setup_multisig_3of3();
-    let op_id = vault.propose_operation(
-        &signers[0],
-        &crate::governance::OpType::SetPerfFee(500_u32),
-    );
+    let op_id =
+        vault.propose_operation(&signers[0], &crate::governance::OpType::SetPerfFee(500_u32));
     // Default 2-of-3 threshold: proposer is signer 1 of 2 needed → still Pending
     let status = vault.operation_status(&op_id);
     assert_eq!(status, Some(soroban_sdk::String::from_str(&env, "Pending")));
@@ -754,10 +782,8 @@ fn test_propose_operation_status_is_pending_before_threshold() {
 #[test]
 fn test_sign_operation_by_non_signer_returns_not_a_signer() {
     let (env, vault, signers, _admin, _token) = setup_multisig_3of3();
-    let op_id = vault.propose_operation(
-        &signers[0],
-        &crate::governance::OpType::SetPerfFee(500_u32),
-    );
+    let op_id =
+        vault.propose_operation(&signers[0], &crate::governance::OpType::SetPerfFee(500_u32));
     let outsider = Address::generate(&env);
     let result = vault.try_sign_operation(&outsider, &op_id);
     assert_eq!(result, Err(Ok(VaultError::NotASigner)));
@@ -766,10 +792,8 @@ fn test_sign_operation_by_non_signer_returns_not_a_signer() {
 #[test]
 fn test_sign_operation_double_sign_returns_already_signed() {
     let (_env, vault, signers, _admin, _token) = setup_multisig_3of3();
-    let op_id = vault.propose_operation(
-        &signers[0],
-        &crate::governance::OpType::SetPerfFee(500_u32),
-    );
+    let op_id =
+        vault.propose_operation(&signers[0], &crate::governance::OpType::SetPerfFee(500_u32));
     // signers[0] already signed as proposer
     let result = vault.try_sign_operation(&signers[0], &op_id);
     assert_eq!(result, Err(Ok(VaultError::OperationAlreadySigned)));
@@ -778,10 +802,8 @@ fn test_sign_operation_double_sign_returns_already_signed() {
 #[test]
 fn test_sign_operation_reaches_threshold_status_becomes_ready() {
     let (env, vault, signers, _admin, _token) = setup_multisig_3of3();
-    let op_id = vault.propose_operation(
-        &signers[0],
-        &crate::governance::OpType::SetPerfFee(500_u32),
-    );
+    let op_id =
+        vault.propose_operation(&signers[0], &crate::governance::OpType::SetPerfFee(500_u32));
     // Proposer = sig 1, sign again with signer[1] = sig 2 → meets 2-of-3
     vault.sign_operation(&signers[1], &op_id);
 
@@ -803,10 +825,8 @@ fn test_sign_unknown_operation_returns_not_found() {
 #[test]
 fn test_execute_operation_before_threshold_returns_threshold_not_met() {
     let (_env, vault, signers, _admin, _token) = setup_multisig_3of3();
-    let op_id = vault.propose_operation(
-        &signers[0],
-        &crate::governance::OpType::SetPerfFee(500_u32),
-    );
+    let op_id =
+        vault.propose_operation(&signers[0], &crate::governance::OpType::SetPerfFee(500_u32));
     // Only 1 of 2 required signatures
     let result = vault.try_execute_operation(&signers[0], &op_id);
     assert_eq!(result, Err(Ok(VaultError::ThresholdNotMet)));
@@ -815,10 +835,8 @@ fn test_execute_operation_before_threshold_returns_threshold_not_met() {
 #[test]
 fn test_execute_operation_after_threshold_succeeds_and_applies_fee() {
     let (_env, vault, signers, admin, _token) = setup_multisig_3of3();
-    let op_id = vault.propose_operation(
-        &signers[0],
-        &crate::governance::OpType::SetPerfFee(500_u32),
-    );
+    let op_id =
+        vault.propose_operation(&signers[0], &crate::governance::OpType::SetPerfFee(500_u32));
     vault.sign_operation(&signers[1], &op_id);
 
     vault.execute_operation(&signers[0], &op_id);
@@ -839,10 +857,8 @@ fn test_execute_operation_after_threshold_succeeds_and_applies_fee() {
 #[test]
 fn test_execute_operation_double_execute_returns_already_executed() {
     let (_env, vault, signers, _admin, _token) = setup_multisig_3of3();
-    let op_id = vault.propose_operation(
-        &signers[0],
-        &crate::governance::OpType::SetPerfFee(500_u32),
-    );
+    let op_id =
+        vault.propose_operation(&signers[0], &crate::governance::OpType::SetPerfFee(500_u32));
     vault.sign_operation(&signers[1], &op_id);
     vault.execute_operation(&signers[0], &op_id);
 
@@ -853,10 +869,8 @@ fn test_execute_operation_double_execute_returns_already_executed() {
 #[test]
 fn test_execute_by_non_signer_returns_not_a_signer() {
     let (env, vault, signers, _admin, _token) = setup_multisig_3of3();
-    let op_id = vault.propose_operation(
-        &signers[0],
-        &crate::governance::OpType::SetPerfFee(500_u32),
-    );
+    let op_id =
+        vault.propose_operation(&signers[0], &crate::governance::OpType::SetPerfFee(500_u32));
     vault.sign_operation(&signers[1], &op_id);
     let outsider = Address::generate(&env);
     let result = vault.try_execute_operation(&outsider, &op_id);
@@ -870,10 +884,8 @@ fn test_execute_by_non_signer_returns_not_a_signer() {
 #[test]
 fn test_operation_expires_after_72_hours() {
     let (env, vault, signers, _admin, _token) = setup_multisig_3of3();
-    let op_id = vault.propose_operation(
-        &signers[0],
-        &crate::governance::OpType::SetPerfFee(500_u32),
-    );
+    let op_id =
+        vault.propose_operation(&signers[0], &crate::governance::OpType::SetPerfFee(500_u32));
 
     // Advance ledger time by 73 hours (> 72h expiry)
     env.ledger().with_mut(|ledger| {
@@ -907,10 +919,8 @@ fn test_execute_expired_operation_returns_expired() {
     // Use a 1-of-3 threshold so this op is Ready immediately
     vault.set_threshold(&_admin, &1_u32);
 
-    let op_id = vault.propose_operation(
-        &signers[0],
-        &crate::governance::OpType::SetPerfFee(200_u32),
-    );
+    let op_id =
+        vault.propose_operation(&signers[0], &crate::governance::OpType::SetPerfFee(200_u32));
 
     // Advance past expiry
     env.ledger().with_mut(|ledger| {
@@ -952,10 +962,7 @@ fn test_tvl_cap_zero_means_uncapped() {
     let (env, vault, signers, admin, token) = setup_multisig_3of3();
 
     // Ensure no cap (0 = uncapped)
-    let op_id = vault.propose_operation(
-        &signers[0],
-        &crate::governance::OpType::SetTvlCap(0_i128),
-    );
+    let op_id = vault.propose_operation(&signers[0], &crate::governance::OpType::SetTvlCap(0_i128));
     vault.sign_operation(&signers[1], &op_id);
     vault.execute_operation(&signers[0], &op_id);
 
@@ -976,10 +983,8 @@ fn test_add_signer_via_admin() {
     vault.add_signer(&admin, &new_signer);
 
     // New signer should now be able to propose
-    let result = vault.try_propose_operation(
-        &new_signer,
-        &crate::governance::OpType::SetPerfFee(100_u32),
-    );
+    let result =
+        vault.try_propose_operation(&new_signer, &crate::governance::OpType::SetPerfFee(100_u32));
     assert!(result.is_ok());
 }
 
@@ -999,10 +1004,8 @@ fn test_remove_signer_via_admin() {
     vault.remove_signer(&admin, &signers[2]);
 
     // Removed signer can no longer propose
-    let result = vault.try_propose_operation(
-        &signers[2],
-        &crate::governance::OpType::SetPerfFee(100_u32),
-    );
+    let result =
+        vault.try_propose_operation(&signers[2], &crate::governance::OpType::SetPerfFee(100_u32));
     assert_eq!(result, Err(Ok(VaultError::NotASigner)));
 }
 
@@ -1053,10 +1056,8 @@ fn test_set_threshold_above_signer_count_returns_invalid_threshold() {
 fn test_multisig_set_mgmt_fee_applies_change() {
     let (_env, vault, signers, admin, token) = setup_multisig_3of3();
 
-    let op_id = vault.propose_operation(
-        &signers[0],
-        &crate::governance::OpType::SetMgmtFee(50_u32),
-    );
+    let op_id =
+        vault.propose_operation(&signers[0], &crate::governance::OpType::SetMgmtFee(50_u32));
     vault.sign_operation(&signers[1], &op_id);
     vault.execute_operation(&signers[0], &op_id);
 
@@ -1093,7 +1094,10 @@ fn test_full_multisig_flow_set_perf_fee() {
     // Step 3: execute
     vault.execute_operation(&signers[2], &op_id);
     let status = vault.operation_status(&op_id);
-    assert_eq!(status, Some(soroban_sdk::String::from_str(&env, "Executed")));
+    assert_eq!(
+        status,
+        Some(soroban_sdk::String::from_str(&env, "Executed"))
+    );
 
     // Step 4: verify applied — 10% fee on a 1M harvest = 100K fee
     let user = Address::generate(&env);
@@ -1125,7 +1129,46 @@ fn test_events_emitted_on_full_flow() {
     vault.execute_operation(&signers[0], &op_id);
     // If all three calls succeeded, all three events were emitted
     let status = vault.operation_status(&op_id);
-    assert_eq!(status, Some(soroban_sdk::String::from_str(&_env, "Executed")));
+    assert_eq!(
+        status,
+        Some(soroban_sdk::String::from_str(&_env, "Executed"))
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 23. Re-initialisation guard (Issue #910)
+// ---------------------------------------------------------------------------
+
+mod reinit_guard {
+    use super::*;
+
+    /// Acceptance Criteria:
+    /// - initialized flag is the first read in initialize
+    /// - Function returns AlreadyInitialized (error code 2) before touching any other storage
+    /// - Dedicated test: call initialize twice and assert second call fails with error code 2
+    /// - Verify via CEI audit that no storage writes precede the guard check
+    #[test]
+    fn test_initialize_twice_fails_with_already_initialized_code_2() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let admin = Address::generate(&env);
+        let token_address = env
+            .register_stellar_asset_contract_v2(admin.clone())
+            .address();
+        let vault_address = env.register_contract(None, AuraVault);
+        let vault = AuraVaultClient::new(&env, &vault_address);
+        let signers: Vec<Address> = Vec::new(&env);
+
+        // First initialize call succeeds
+        let res1 = vault.try_initialize(&admin, &token_address, &signers, &0_u32);
+        assert_eq!(res1, Ok(Ok(())));
+
+        // Second initialize call fails with AlreadyInitialized (error code 2)
+        let res2 = vault.try_initialize(&admin, &token_address, &signers, &0_u32);
+        assert_eq!(res2, Err(Ok(VaultError::AlreadyInitialized)));
+        assert_eq!(VaultError::AlreadyInitialized as u32, 2);
+    }
 }
 
 // ---------------------------------------------------------------------------

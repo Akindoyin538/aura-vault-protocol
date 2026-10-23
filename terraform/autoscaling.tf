@@ -34,6 +34,7 @@ resource "aws_launch_template" "backend" {
     
     tags = {
       Name = "${var.project_name}-backend-${var.environment}"
+      Component = "backend"
     }
   }
   
@@ -166,5 +167,6 @@ resource "aws_key_pair" "backend" {
   
   tags = {
     Name = "${var.project_name}-backend-key-${var.environment}"
+    Component = "backend"
   }
 }

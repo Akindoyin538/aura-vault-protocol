@@ -289,6 +289,10 @@ pub enum VaultError {
     ThresholdNotMet        = 40,
     /// The provided signer threshold is invalid for the current signer set.
     InvalidThreshold       = 41,
+    /// A configured swap returned fewer underlying tokens than the minimum.
+    DexSlippageExceeded    = 42,
+    /// No DEX router has been configured by the vault administrator.
+    DexNotConfigured       = 43,
 }
 
 impl VaultError {
@@ -336,6 +340,8 @@ impl VaultError {
             VaultError::OperationAlreadySigned => "Signer has already signed this operation",
             VaultError::ThresholdNotMet => "Operation signature threshold has not been met",
             VaultError::InvalidThreshold => "Invalid multi-sig threshold",
+            VaultError::DexSlippageExceeded => "DEX swap output is below the required minimum",
+            VaultError::DexNotConfigured => "DEX router has not been configured",
         }
     }
 }
