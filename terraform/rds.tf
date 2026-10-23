@@ -5,6 +5,7 @@ resource "aws_db_subnet_group" "main" {
   
   tags = {
     Name = "${var.project_name}-db-subnet-group-${var.environment}"
+    Component = "database"
   }
 }
 
@@ -30,6 +31,7 @@ resource "aws_db_parameter_group" "main" {
   
   tags = {
     Name = "${var.project_name}-db-param-group-${var.environment}"
+    Component = "database"
   }
 }
 
@@ -71,6 +73,7 @@ resource "aws_db_instance" "main" {
   
   tags = {
     Name = "${var.project_name}-db-${var.environment}"
+    Component = "database"
   }
   
   depends_on = [aws_iam_role_policy_attachment.rds_monitoring]
@@ -82,6 +85,7 @@ resource "aws_s3_bucket" "backups" {
   
   tags = {
     Name = "${var.project_name}-db-backups-${var.environment}"
+    Component = "database"
   }
 }
 

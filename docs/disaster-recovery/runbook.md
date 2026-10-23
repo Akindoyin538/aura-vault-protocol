@@ -16,6 +16,7 @@
 - [Backup Strategy](#backup-strategy)
 - [Incident Classification](#incident-classification)
 - [Database Restore from S3 Backup](#database-restore-from-s3-backup)
+- [Cross-Region Production Failover (eu-west-1)](#cross-region-production-failover-eu-west-1)
 - [Redis Cache Rebuild Procedure](#redis-cache-rebuild-procedure)
 - [Contract Re-Deployment Procedure](#contract-re-deployment-procedure)
 - [Infrastructure Full Rebuild](#infrastructure-full-rebuild)
@@ -364,6 +365,66 @@ curl https://api.auravault.example/api/health | jq .contract_status
 > **Note on user positions:** A fresh re-deployment starts with zero state. If existing depositor balances need to be migrated, coordinate with the Stellar ecosystem team to plan a migration strategy before proceeding.
 
 ---
+
+## Cross-Region Production Failover (eu-west-1)
+
+Production's Terraform DR stack creates an encrypted PostgreSQL read replica in
+`eu-west-1`, monitors `ReplicaLag`, and can notify PagerDuty through the DR
+region SNS topic. It does not create a second application cluster or ALB. Do
+not enable API DNS failover until the recovery application is already deployed
+and healthy behind a public ALB in `eu-west-1`.
+
+### Preconditions
+
+- The production replica Terraform state has been applied and the replica is
+  `available` in `eu-west-1`.
+- `TF_VAR_pagerduty_integration_key` is supplied through the CI secret store
+  when applying `terraform/envs/production`.
+- A recovery application ALB is deployed in `eu-west-1`, has the same TLS and
+  `/api/health` behavior as production, and its database secret can be updated
+  to the promoted database endpoint.
+- The root Terraform deployment has `dr_alb_dns_name` and `dr_alb_zone_id`
+  configured. These enable the Route 53 primary/secondary records for
+  `api.<domain>`; without both values, the existing primary-only record stays
+  in place.
+
+### Fail over during a confirmed primary-region outage
+
+1. Declare a P1 incident and record the time. Check the PagerDuty replica-lag
+   alert and record the latest `ReplicaLag` datapoint as the estimated RPO.
+2. Confirm the primary region is unavailable and the DR database is current
+   enough for the incident commander to approve promotion. Promotion stops
+   replication and cannot be automatically reversed.
+3. Promote the replica in `eu-west-1` and wait for it to become writable:
+
+   ```bash
+   aws rds promote-read-replica \
+     --db-instance-identifier aura-vault-db-prod-replica-prod \
+     --region eu-west-1
+   aws rds wait db-instance-available \
+     --db-instance-identifier aura-vault-db-prod-replica-prod \
+     --region eu-west-1
+   aws rds describe-db-instances \
+     --db-instance-identifier aura-vault-db-prod-replica-prod \
+     --region eu-west-1 \
+     --query 'DBInstances[0].Endpoint.Address' --output text
+   ```
+
+4. Update the recovery backend's database secret with the promoted endpoint,
+   restart the backend, and verify `/api/health` and read/write behavior against
+   the recovery environment.
+5. Route 53 moves `api.<domain>` to the DR ALB when the primary health check
+   fails, provided the DR target inputs were configured before the outage.
+   Confirm DNS and external health checks before increasing traffic.
+6. Record actual recovery time and the last replicated transaction time. Keep
+   the promoted database authoritative until the primary region is recovered
+   and a controlled data reconciliation and reverse-replication plan is
+   approved. Do not point writes back to the old primary.
+
+The repository does not provision the recovery application ALB, and this
+runbook does not claim the RTO/RPO targets have been measured. Record a real DR
+drill and its measured RTO/RPO in the drill log before treating those targets
+as demonstrated.
 
 ## Infrastructure Full Rebuild
 

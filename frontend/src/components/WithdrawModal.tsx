@@ -24,12 +24,13 @@ import {
   ShareInput,
   FormField,
 } from "./AccessibleFormComponents";
-import RedemptionPreview from "./RedemptionPreview";
+import { UsdAmountConverter } from "./UsdAmountConverter";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 type WithdrawStep = 1 | 2 | 3;
 type TxStatus = "idle" | "pending" | "success" | "error";
+type SlippagePreset = "0.1" | "0.5" | "1" | "custom";
 
 export interface WithdrawModalProps {
   isOpen: boolean;
@@ -63,6 +64,27 @@ function previewTokens(shares: string, totalAssets: string, totalShares: string)
   const ts = parseFloat(totalShares);
   if (isNaN(s) || s <= 0 || ts === 0) return "0";
   return Math.floor((s * ta) / ts).toFixed(4);
+}
+
+async function fetchLiveSharePrice(): Promise<number> {
+  const apiBase = process.env.NEXT_PUBLIC_API_URL ?? "";
+  const response = await fetch(`${apiBase}/api/v1/vault/stats`, { cache: "no-store" });
+  if (!response.ok) throw new Error("Could not refresh the vault exchange rate. Please try again.");
+  const payload = await response.json() as {
+    data?: { sharePrice?: string | number };
+    sharePrice?: string | number;
+  };
+  const price = Number(payload.data?.sharePrice ?? payload.sharePrice);
+  if (!Number.isFinite(price) || price <= 0) {
+    throw new Error("The vault returned an invalid exchange rate. Please try again.");
+  }
+  return price;
+}
+
+function tokensAtPrice(shares: string, price: number): string {
+  const amount = Number(shares);
+  if (!Number.isFinite(amount) || amount <= 0) return "0";
+  return (Math.floor(amount * price * 10_000) / 10_000).toFixed(4);
 }
 
 function Spinner() {
@@ -187,6 +209,11 @@ export function WithdrawModal({
   const [txStatus, setTxStatus] = useState<TxStatus>("idle");
   const [txHash, setTxHash] = useState("");
   const [txError, setTxError] = useState("");
+  const [slippagePreset, setSlippagePreset] = useState<SlippagePreset>("0.5");
+  const [customSlippage, setCustomSlippage] = useState("0.5");
+  const [reviewEstimate, setReviewEstimate] = useState("");
+  const [quoteError, setQuoteError] = useState("");
+  const slippagePercent = slippagePreset === "custom" ? Number(customSlippage) : Number(slippagePreset);
 
   // Reset when closed
   useEffect(() => {
@@ -204,9 +231,37 @@ export function WithdrawModal({
     }
   }, [isOpen]);
 
+  useEffect(() => {
+    try {
+      const saved = window.localStorage.getItem("aura-withdraw-slippage");
+      if (!saved) return;
+      const parsed = JSON.parse(saved) as { preset?: SlippagePreset; custom?: string };
+      if (["0.1", "0.5", "1", "custom"].includes(parsed.preset ?? "")) {
+        setSlippagePreset(parsed.preset!);
+      }
+      if (parsed.custom && Number(parsed.custom) > 0 && Number(parsed.custom) <= 5) {
+        setCustomSlippage(parsed.custom);
+      }
+    } catch {
+      // Ignore unavailable or invalid local preferences.
+    }
+  }, []);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem("aura-withdraw-slippage", JSON.stringify({ preset: slippagePreset, custom: customSlippage }));
+    } catch {
+      // The setting remains active for this session when storage is unavailable.
+    }
+  }, [slippagePreset, customSlippage]);
+
   const estimatedTokens = previewTokens(shares, totalAssets, totalShares);
 
   function validate(): boolean {
+    if (!Number.isFinite(slippagePercent) || slippagePercent <= 0 || slippagePercent > 5) {
+      setSharesError("Slippage tolerance must be greater than 0 and no more than 5%.");
+      return false;
+    }
     const n = parseFloat(shares);
     if (!shares || isNaN(n) || n <= 0) {
       setSharesError("Enter a share amount greater than 0.");
@@ -251,6 +306,14 @@ export function WithdrawModal({
     if (step === 1) {
       if (!validate()) return;
       await fetchGasEstimate(shares);
+      try {
+        const livePrice = await fetchLiveSharePrice();
+        setReviewEstimate(tokensAtPrice(shares, livePrice));
+        setQuoteError("");
+      } catch (err) {
+        setQuoteError(err instanceof Error ? err.message : "Could not refresh the vault exchange rate.");
+        return;
+      }
       setStep(2);
     } else if (step === 2) {
       await handleSubmit();
@@ -258,10 +321,21 @@ export function WithdrawModal({
   }
 
   async function handleSubmit() {
-    setTxStatus("pending");
-    setTxError("");
-    setStep(3);
     try {
+      const livePrice = await fetchLiveSharePrice();
+      const latestEstimate = Number(tokensAtPrice(shares, livePrice));
+      const reviewed = Number(reviewEstimate || estimatedTokens);
+      const changePct = reviewed > 0 ? Math.abs(latestEstimate - reviewed) / reviewed * 100 : 100;
+      if (changePct > slippagePercent) {
+        setQuoteError(`The exchange rate changed by ${changePct.toFixed(2)}%, above your ${slippagePercent}% tolerance. Refresh the quote before signing.`);
+        setReviewEstimate(tokensAtPrice(shares, livePrice));
+        setStep(2);
+        return;
+      }
+      setQuoteError("");
+      setTxStatus("pending");
+      setTxError("");
+      setStep(3);
       const res = await fetch("/api/vault/withdraw", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -274,8 +348,13 @@ export function WithdrawModal({
       onSuccess?.();
     } catch (err: unknown) {
       const raw = err instanceof Error ? err.message : "Withdrawal failed";
+      if (step === 2 && txStatus === "idle") {
+        setQuoteError(raw);
+        return;
+      }
       setTxError(resolveVaultError(raw));
       setTxStatus("error");
+      setStep(3);
     }
   }
 
@@ -315,6 +394,7 @@ export function WithdrawModal({
       {/* ── Step 1: Share Input ──────────────────────────────────────────── */}
       {step === 1 && (
         <div className="flex flex-col gap-5">
+          {quoteError && <p role="alert" className="rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-200">{quoteError}</p>}
           <div className="rounded-lg bg-zinc-50 dark:bg-zinc-800 px-4 py-3 text-sm">
             <span className="text-zinc-500 dark:text-zinc-400">Your share balance: </span>
             <span className="font-mono font-semibold text-zinc-900 dark:text-zinc-50">
@@ -347,6 +427,22 @@ export function WithdrawModal({
             )}
           </FormField>
 
+          <details className="rounded-lg border border-zinc-200 px-4 py-3 dark:border-zinc-700">
+            <summary className="cursor-pointer text-sm font-medium text-zinc-700 dark:text-zinc-300">Advanced settings</summary>
+            <div className="mt-3 flex flex-wrap items-end gap-3">
+              <label htmlFor="withdraw-slippage" className="flex flex-col gap-1 text-xs text-zinc-500 dark:text-zinc-400">
+                Slippage tolerance
+                <select id="withdraw-slippage" value={slippagePreset} onChange={(event) => setSlippagePreset(event.target.value as SlippagePreset)} className="h-9 rounded-lg border border-zinc-200 px-2 text-sm text-zinc-900 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100">
+                  <option value="0.1">0.1%</option><option value="0.5">0.5% (default)</option><option value="1">1%</option><option value="custom">Custom</option>
+                </select>
+              </label>
+              {slippagePreset === "custom" && <label htmlFor="withdraw-custom-slippage" className="flex flex-col gap-1 text-xs text-zinc-500 dark:text-zinc-400">Custom tolerance (%)
+                <input id="withdraw-custom-slippage" type="number" min="0.01" max="5" step="0.01" value={customSlippage} onChange={(event) => setCustomSlippage(event.target.value)} className="h-9 w-28 rounded-lg border border-zinc-200 px-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100" />
+              </label>}
+              {slippagePreset === "custom" && (slippagePercent <= 0 || slippagePercent > 5) && <p role="alert" className="text-xs text-red-600">Enter a value greater than 0 and no more than 5%.</p>}
+            </div>
+          </details>
+
           {/* Quick-select percentage buttons */}
           <div className="flex gap-2">
             {[25, 50, 75, 100].map((pct) => (
@@ -372,6 +468,8 @@ export function WithdrawModal({
             shareSymbol={shareSymbol}
           />
 
+          <UsdAmountConverter tokenAmount={estimatedTokens} shareAmount={shares} />
+
           <button
             type="button"
             onClick={() => void handleNext()}
@@ -386,11 +484,16 @@ export function WithdrawModal({
       {/* ── Step 2: Review ───────────────────────────────────────────────── */}
       {step === 2 && (
         <div className="flex flex-col gap-5">
+          {quoteError && <p role="alert" className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">{quoteError}</p>}
+          <div className="rounded-lg bg-zinc-50 px-4 py-3 text-sm dark:bg-zinc-800">
+            <p className="font-medium text-zinc-800 dark:text-zinc-100">Rate protection</p>
+            <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">The withdrawal will stop if the estimated output changes by more than {slippagePercent}% before submission.</p>
+          </div>
           {/* Summary table */}
           <dl className="rounded-lg border border-zinc-200 dark:border-zinc-700 divide-y divide-zinc-100 dark:divide-zinc-800">
             {[
               { label: "Shares to burn", value: `${shares} ${shareSymbol}` },
-              { label: "Estimated USDC", value: `${estimatedTokens} USDC` },
+              { label: "Estimated USDC", value: `${reviewEstimate || estimatedTokens} USDC` },
             ].map(({ label, value }) => (
               <div key={label} className="flex justify-between px-4 py-3 text-sm">
                 <dt className="text-zinc-500 dark:text-zinc-400">{label}</dt>

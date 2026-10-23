@@ -24,27 +24,19 @@ This guide covers interacting with the Aura Vault backend API from Python. It in
 
 ### Requirements
 
-```
-Python >= 3.10
-```
+Python 3.11+
 
 ### Install dependencies
 
-```bash
-pip install stellar-sdk==10.0.0 requests==2.32.3 aiohttp==3.9.5
-```
-
-Or with a `requirements.txt`:
-
-```
-stellar-sdk==10.0.0
-requests==2.32.3
-aiohttp==3.9.5
-```
+Install the pinned dependencies from [`docs/python/requirements.txt`](python/requirements.txt):
 
 ```bash
-pip install -r requirements.txt
+python3.11 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r docs/python/requirements.txt
 ```
+
+The complete executable example is [`docs/python/aura_vault_example.py`](python/aura_vault_example.py). It demonstrates challenge-response authentication, public vault stats, share-value estimation, a signed Soroban deposit, bounded retry behavior, and transaction confirmation polling. Start with testnet and a funded test account. Do not place a production secret in shell history or source control.
 
 ### Configuration
 

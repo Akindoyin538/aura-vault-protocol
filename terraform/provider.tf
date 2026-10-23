@@ -26,8 +26,10 @@ provider "aws" {
   default_tags {
     tags = {
       Project     = "aura-vault-protocol"
-      Environment = var.environment
+      Environment = local.cost_environment
+      Component   = var.default_component
       ManagedBy   = "terraform"
+      CostCenter  = var.cost_center
     }
   }
 }
@@ -41,8 +43,10 @@ provider "aws" {
   default_tags {
     tags = {
       Project     = "aura-vault-protocol"
-      Environment = var.environment
+      Environment = local.cost_environment
+      Component   = var.default_component
       ManagedBy   = "terraform"
+      CostCenter  = var.cost_center
     }
   }
 }

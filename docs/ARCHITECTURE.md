@@ -2,6 +2,52 @@
 
 ## System Overview
 
+## Event-Driven Data Flow
+
+This sequence shows how contract events become live frontend updates. The
+contract emits events on Soroban; the backend listener reads them from Horizon,
+persists indexed events in PostgreSQL, invalidates cached aggregates in Redis,
+and broadcasts updates to subscribed clients over SSE.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User
+    participant Contract as Soroban vault
+    participant Horizon
+    participant Listener as Backend event listener
+    participant Redis
+    participant PG as PostgreSQL
+    participant SSE as SSE endpoint
+    participant UI as Frontend
+
+    User->>Contract: deposit() / withdraw() / harvest() / governance call
+    Contract-->>Horizon: Emit typed contract event
+    Listener->>Horizon: Stream events from last ledger cursor
+    alt Horizon available
+        Horizon-->>Listener: Event payload and ledger sequence
+        Listener->>PG: Insert event (idempotent by ledger and event index)
+        Listener->>Redis: Invalidate affected vault stats
+        alt Cache invalidation succeeds
+            Redis-->>Listener: Cache miss on next read
+        else Redis unavailable
+            Listener->>Listener: Log failure; retry invalidation with backoff
+        end
+        Listener-->>SSE: Publish normalized event
+        SSE-->>UI: data: {type, contractId, ledger, payload}
+        UI->>UI: Update affected dashboard state
+    else Horizon unavailable or stream disconnected
+        Listener->>Listener: Retain last cursor and reconnect with backoff
+        Listener->>Horizon: Resume from last confirmed ledger
+    end
+
+    Note over Contract,UI: Deposit, withdrawal, harvest, proposal, vote, execution, pause, and admin-transfer events use the same pipeline.
+```
+
+Events are persisted before broadcast. Consumers should deduplicate by the
+contract event identity and treat SSE as a low-latency notification; REST reads
+remain the source of current aggregate state.
+
 Aura Vault is a share-based yield vault on Stellar/Soroban with a full-stack off-chain companion (API, frontend, mobile). Users deposit a single SEP-41 token, receive proportional shares, and auto-compound yield through permissionless keeper harvests.
 
 ```
