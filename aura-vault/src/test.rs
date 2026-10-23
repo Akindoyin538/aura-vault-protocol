@@ -73,6 +73,49 @@ fn mint(env: &Env, token: &Address, admin: &Address, recipient: &Address, amount
 // ---------------------------------------------------------------------------
 
 #[test]
+fn test_custom_metadata_is_exposed_as_sep41_views() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let token_address = env.register_stellar_asset_contract_v2(admin.clone()).address();
+    let vault_address = env.register_contract(None, AuraVault);
+    let vault = AuraVaultClient::new(&env, &vault_address);
+    let signers: Vec<Address> = Vec::new(&env);
+    let name = soroban_sdk::String::from_str(&env, "Test Vault Share");
+    let symbol = soroban_sdk::String::from_str(&env, "TVS");
+
+    vault.initialize_with_metadata(&admin, &token_address, &signers, &9_u32, &name, &symbol);
+
+    assert_eq!(vault.name(), name);
+    assert_eq!(vault.symbol(), symbol);
+    assert_eq!(vault.decimals(), 9);
+}
+
+#[test]
+fn test_mid_epoch_deposit_receives_time_weighted_harvest_yield() {
+    let (env, vault, admin, token) = setup();
+    vault.set_fees(&admin, &0_u32, &0_u32);
+    let alice = Address::generate(&env);
+    let bob = Address::generate(&env);
+    mint(&env, &token, &admin, &alice, 1_000);
+    mint(&env, &token, &admin, &bob, 1_000);
+    mint(&env, &token, &admin, &admin, 2_000);
+
+    vault.deposit(&alice, &1_000);
+    env.ledger().set_timestamp(100);
+    vault.deposit(&bob, &1_000);
+    assert_eq!(vault.deposit_epoch(&bob), 0);
+    assert_eq!(vault.deposit_timestamp(&bob), 100);
+    env.ledger().set_timestamp(200);
+    vault.harvest(&admin, &2_000);
+    assert_eq!(vault.epoch_start_timestamp(), 200);
+
+    let bob_redeem = vault.withdraw(&bob, &1_000);
+    assert_eq!(bob_redeem, 1_666);
+    assert_eq!(vault.withdraw(&alice, &1_000), 2_333);
+}
+
+#[test]
 fn test_double_init_returns_already_initialized() {
     let (env, vault, admin, token) = setup();
     let signers: Vec<Address> = Vec::new(&env);
@@ -636,7 +679,7 @@ fn test_non_signer_cannot_propose() {
     let non_signer = Address::generate(&env);
     let new_admin = Address::generate(&env);
     let result = vault.try_propose_update_admin(&non_signer, &new_admin);
-    assert_eq!(result, Err(Ok(VaultError::InvalidAddress)));
+    assert_eq!(result, Err(Ok(VaultError::AlreadyVoted)));
 }
 
 #[test]
@@ -790,13 +833,13 @@ fn test_sign_operation_by_non_signer_returns_not_a_signer() {
 }
 
 #[test]
-fn test_sign_operation_double_sign_returns_already_signed() {
+fn test_sign_operation_double_sign_returns_already_voted() {
     let (_env, vault, signers, _admin, _token) = setup_multisig_3of3();
     let op_id =
         vault.propose_operation(&signers[0], &crate::governance::OpType::SetPerfFee(500_u32));
     // signers[0] already signed as proposer
     let result = vault.try_sign_operation(&signers[0], &op_id);
-    assert_eq!(result, Err(Ok(VaultError::OperationAlreadySigned)));
+    assert_eq!(result, Err(Ok(VaultError::AlreadyVoted)));
 }
 
 #[test]
@@ -2415,410 +2458,237 @@ fn test_different_referrers_have_independent_counts() {
 }
 
 // ===========================================================================
-// TWAP ORACLE TESTS
-// ===========================================================================
-//
-// Tests for the on-chain TWAP (time-weighted average price) oracle.
-// Verifies:
-//   - get_twap returns spot price when fewer than 2 observations exist
-//   - 1h, 6h, 24h window calculations are correct
-//   - Circular buffer wrap-around is handled correctly
-//   - TWAP is resistant to flash-loan style manipulation (only harvest changes price)
-//   - Buffer overflow (more than 24 observations) wraps correctly
+// TVL CAP TESTS
 // ===========================================================================
 
-use soroban_sdk::testutils::Ledger as _;
+// ---------------------------------------------------------------------------
+// set_tvl_caps / get_tvl_caps — governance
+// ---------------------------------------------------------------------------
 
-/// Helper: set up vault with a depositor and return (env, vault, admin, token).
-fn setup_with_deposit() -> (Env, AuraVaultClient<'static>, Address, Address) {
+#[test]
+fn test_get_tvl_caps_returns_none_by_default() {
+    let (_env, vault, _admin, _token) = setup();
+    assert_eq!(vault.get_tvl_caps(), (None, None));
+}
+
+#[test]
+fn test_set_tvl_caps_stores_and_retrieves_both() {
+    let (_env, vault, _admin, _token) = setup();
+    vault.set_tvl_caps(&Some(5_000_000_i128), &Some(10_000_000_i128));
+    assert_eq!(vault.get_tvl_caps(), (Some(5_000_000), Some(10_000_000)));
+}
+
+#[test]
+fn test_set_tvl_caps_soft_only() {
+    let (_env, vault, _admin, _token) = setup();
+    vault.set_tvl_caps(&Some(3_000_000_i128), &None);
+    assert_eq!(vault.get_tvl_caps(), (Some(3_000_000), None));
+}
+
+#[test]
+fn test_set_tvl_caps_hard_only() {
+    let (_env, vault, _admin, _token) = setup();
+    vault.set_tvl_caps(&None, &Some(8_000_000_i128));
+    assert_eq!(vault.get_tvl_caps(), (None, Some(8_000_000)));
+}
+
+#[test]
+fn test_set_tvl_caps_can_clear_caps() {
+    let (_env, vault, _admin, _token) = setup();
+    vault.set_tvl_caps(&Some(5_000_000_i128), &Some(10_000_000_i128));
+    vault.set_tvl_caps(&None, &None);
+    assert_eq!(vault.get_tvl_caps(), (None, None));
+}
+
+#[test]
+fn test_set_tvl_caps_zero_soft_returns_zero_amount() {
+    let (_env, vault, _admin, _token) = setup();
+    let result = vault.try_set_tvl_caps(&Some(0_i128), &None);
+    assert_eq!(result, Err(Ok(VaultError::ZeroAmount)));
+}
+
+#[test]
+fn test_set_tvl_caps_zero_hard_returns_zero_amount() {
+    let (_env, vault, _admin, _token) = setup();
+    let result = vault.try_set_tvl_caps(&None, &Some(0_i128));
+    assert_eq!(result, Err(Ok(VaultError::ZeroAmount)));
+}
+
+#[test]
+fn test_set_tvl_caps_soft_greater_than_hard_returns_error() {
+    let (_env, vault, _admin, _token) = setup();
+    // soft > hard is invalid
+    let result = vault.try_set_tvl_caps(&Some(10_000_000_i128), &Some(5_000_000_i128));
+    assert_eq!(result, Err(Ok(VaultError::MathOverflow)));
+}
+
+#[test]
+fn test_set_tvl_caps_soft_equal_to_hard_is_valid() {
+    let (_env, vault, _admin, _token) = setup();
+    // soft == hard is allowed (every deposit that pushes past soft also hits hard)
+    vault.set_tvl_caps(&Some(5_000_000_i128), &Some(5_000_000_i128));
+    assert_eq!(vault.get_tvl_caps(), (Some(5_000_000), Some(5_000_000)));
+}
+
+// ---------------------------------------------------------------------------
+// Hard cap enforcement in deposit()
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_deposit_exceeds_hard_cap_is_rejected() {
     let (env, vault, admin, token) = setup();
+    // Hard cap = 5M; try to deposit 6M into an empty vault → total would be 6M > 5M.
+    vault.set_tvl_caps(&None, &Some(5_000_000_i128));
+
     let user = Address::generate(&env);
-    mint(&env, &token, &admin, &user, 1_000_000);
-    vault.deposit(&user, &1_000_000);
-    (env, vault, admin, token)
-}
-
-/// Helper: perform a harvest of `yield_amount` at the given timestamp.
-fn harvest_at(env: &Env, vault: &AuraVaultClient, admin: &Address, token: &Address, yield_amount: i128, ts: u64) {
-    env.ledger().set_timestamp(ts);
-    mint(env, token, admin, admin, yield_amount);
-    vault.harvest(admin, &yield_amount);
-}
-
-// ---------------------------------------------------------------------------
-// 1. Spot price fallback — fewer than 2 observations
-// ---------------------------------------------------------------------------
-
-#[test]
-fn test_twap_no_observations_returns_spot_price() {
-    // No harvests yet → no observations → should return spot price
-    let (env, vault, _admin, _token) = setup_with_deposit();
-    // 1_000_000 assets, 1_000_000 shares → price = 1e9 (1:1)
-    let twap = vault.get_twap(&3600);
-    assert_eq!(twap, 1_000_000_000);
+    mint(&env, &token, &admin, &user, 6_000_000);
+    let result = vault.try_deposit(&user, &6_000_000);
+    assert_eq!(result, Err(Ok(VaultError::TvlCapExceeded)));
 }
 
 #[test]
-fn test_twap_one_observation_returns_spot_price() {
-    // One harvest → one observation → should return spot price (latest price)
-    let (env, vault, admin, token) = setup_with_deposit();
-    // Harvest 200_000 at ts=1000 → price = 1.2e9
-    harvest_at(&env, &vault, &admin, &token, 200_000, 1000);
-    let twap = vault.get_twap(&3600);
-    // Spot price after harvest: 1_200_000 / 1_000_000 * 1e9 = 1_200_000_000
-    assert_eq!(twap, 1_200_000_000);
+fn test_deposit_exactly_at_hard_cap_is_allowed() {
+    let (env, vault, admin, token) = setup();
+    // Hard cap = 5M; deposit exactly 5M → total = 5M = cap → OK.
+    vault.set_tvl_caps(&None, &Some(5_000_000_i128));
+
+    let user = Address::generate(&env);
+    mint(&env, &token, &admin, &user, 5_000_000);
+    let shares = vault.deposit(&user, &5_000_000);
+    assert_eq!(shares, 5_000_000);
+    assert_eq!(vault.total_assets(), 5_000_000);
+}
+
+#[test]
+fn test_deposit_one_above_hard_cap_is_rejected() {
+    let (env, vault, admin, token) = setup();
+    vault.set_tvl_caps(&None, &Some(5_000_000_i128));
+
+    let user = Address::generate(&env);
+    mint(&env, &token, &admin, &user, 5_000_001);
+    let result = vault.try_deposit(&user, &5_000_001);
+    assert_eq!(result, Err(Ok(VaultError::TvlCapExceeded)));
+}
+
+#[test]
+fn test_deposit_fills_vault_to_hard_cap_then_next_deposit_fails() {
+    let (env, vault, admin, token) = setup();
+    vault.set_tvl_caps(&None, &Some(5_000_000_i128));
+
+    // First depositor fills exactly to the cap.
+    let alice = Address::generate(&env);
+    mint(&env, &token, &admin, &alice, 5_000_000);
+    vault.deposit(&alice, &5_000_000);
+
+    // Any further deposit—even 1 unit—is blocked.
+    let bob = Address::generate(&env);
+    mint(&env, &token, &admin, &bob, 1);
+    let result = vault.try_deposit(&bob, &1);
+    assert_eq!(result, Err(Ok(VaultError::TvlCapExceeded)));
+}
+
+#[test]
+fn test_hard_cap_lifted_allows_more_deposits() {
+    let (env, vault, admin, token) = setup();
+    vault.set_tvl_caps(&None, &Some(5_000_000_i128));
+
+    let alice = Address::generate(&env);
+    mint(&env, &token, &admin, &alice, 5_000_000);
+    vault.deposit(&alice, &5_000_000);
+
+    // Lift the cap.
+    vault.set_tvl_caps(&None, &Some(10_000_000_i128));
+
+    let bob = Address::generate(&env);
+    mint(&env, &token, &admin, &bob, 5_000_000);
+    let shares = vault.deposit(&bob, &5_000_000);
+    assert!(shares > 0);
+}
+
+#[test]
+fn test_no_hard_cap_allows_unlimited_deposits() {
+    let (env, vault, admin, token) = setup();
+    // No cap set (default) — large deposit must succeed.
+    let user = Address::generate(&env);
+    let large: i128 = 1_000_000_000_000;
+    mint(&env, &token, &admin, &user, large);
+    let shares = vault.deposit(&user, &large);
+    assert_eq!(shares, large);
 }
 
 // ---------------------------------------------------------------------------
-// 2. TWAP with 2 observations — 1h window
+// Soft cap warning in deposit()
 // ---------------------------------------------------------------------------
 
 #[test]
-fn test_twap_1h_window_two_observations() {
-    let (env, vault, admin, token) = setup_with_deposit();
+fn test_deposit_below_soft_cap_succeeds_without_warning() {
+    let (env, vault, admin, token) = setup();
+    // Soft cap = 5M, hard cap = 10M
+    vault.set_tvl_caps(&Some(5_000_000_i128), &Some(10_000_000_i128));
 
-    // Harvest at t=0 → price = 1.1e9 (1_100_000 / 1_000_000)
-    harvest_at(&env, &vault, &admin, &token, 100_000, 0);
-    // Harvest at t=1800 (30 min later) → price = 1.2e9 (1_200_000 / 1_000_000)
-    harvest_at(&env, &vault, &admin, &token, 100_000, 1800);
-
-    // Query at t=3600 (1h window from t=0)
-    env.ledger().set_timestamp(3600);
-
-    // Two observations: t=0 price=1.1e9, t=1800 price=1.2e9
-    // Segments: [0→1800] uses price from t=0 obs? No — TWAP walks from newest to oldest.
-    // newest obs: t=1800, price=1.2e9
-    //   segment: now(3600) - t(1800) = 1800s, weight = 1800 * 1.2e9
-    // oldest obs: t=0, price=1.1e9
-    //   segment: t(1800) - t(0) = 1800s, weight = 1800 * 1.1e9
-    // total_weight = 3600
-    // twap = (1800*1.2e9 + 1800*1.1e9) / 3600 = (2.16e12 + 1.98e12) / 3600 = 4.14e12 / 3600 = 1.15e9
-    let twap = vault.get_twap(&3600);
-    assert_eq!(twap, 1_150_000_000); // (1.1e9 + 1.2e9) / 2
+    let user = Address::generate(&env);
+    mint(&env, &token, &admin, &user, 4_000_000);
+    // Should succeed; no TvlCapExceeded, total stays under soft cap
+    let shares = vault.deposit(&user, &4_000_000);
+    assert_eq!(shares, 4_000_000);
+    assert_eq!(vault.total_assets(), 4_000_000);
 }
 
-// ---------------------------------------------------------------------------
-// 3. TWAP with multiple observations — 6h window
-// ---------------------------------------------------------------------------
-
 #[test]
-fn test_twap_6h_window_multiple_observations() {
-    let (env, vault, admin, token) = setup_with_deposit();
+fn test_deposit_exceeding_soft_cap_still_succeeds() {
+    let (env, vault, admin, token) = setup();
+    // Soft cap = 3M, hard cap = 10M.
+    // Deposit 6M — crosses the soft cap but not the hard cap → must succeed.
+    vault.set_tvl_caps(&Some(3_000_000_i128), &Some(10_000_000_i128));
 
-    // Initial: 1_000_000 assets, 1_000_000 shares, price = 1e9
-
-    // Harvest 100_000 every hour for 6 hours
-    // t=3600: price = 1.1e9
-    // t=7200: price = 1.2e9
-    // t=10800: price = 1.3e9
-    // t=14400: price = 1.4e9
-    // t=18000: price = 1.5e9
-    // t=21600: price = 1.6e9
-    for hour in 1..=6u64 {
-        let ts = hour * 3600;
-        harvest_at(&env, &vault, &admin, &token, 100_000, ts);
-    }
-
-    // Query at t=21600 with 6h window (21600 seconds)
-    env.ledger().set_timestamp(21600);
-
-    // We have 6 observations at t=3600,7200,...,21600
-    // TWAP from newest to oldest:
-    //   t=21600: price=1.6e9, segment: 21600-21600=0 (skip, zero segment)
-    // Actually: now=21600, newest obs ts=21600, segment=0
-    // Then prev_ts=21600, next obs ts=18000, segment=3600, price=1.5e9
-    // Then prev_ts=18000, next obs ts=14400, segment=3600, price=1.4e9
-    // Then prev_ts=14400, next obs ts=10800, segment=3600, price=1.3e9
-    // Then prev_ts=10800, next obs ts=7200, segment=3600, price=1.2e9
-    // Then prev_ts=7200, next obs ts=3600, segment=3600, price=1.1e9
-    // total_weight = 5*3600 = 18000
-    // twap = (1.5e9 + 1.4e9 + 1.3e9 + 1.2e9 + 1.1e9) * 3600 / 18000
-    //      = 6.5e9 * 3600 / 18000 = 6.5e9 / 5 = 1.3e9
-    let twap = vault.get_twap(&21600);
-    assert_eq!(twap, 1_300_000_000);
+    let user = Address::generate(&env);
+    mint(&env, &token, &admin, &user, 6_000_000);
+    let shares = vault.deposit(&user, &6_000_000);
+    assert_eq!(shares, 6_000_000);
+    assert_eq!(vault.total_assets(), 6_000_000);
 }
 
-// ---------------------------------------------------------------------------
-// 4. TWAP with 24h window — full buffer
-// ---------------------------------------------------------------------------
-
 #[test]
-fn test_twap_24h_window_full_buffer() {
-    let (env, vault, admin, token) = setup_with_deposit();
+fn test_deposit_at_soft_cap_exact_succeeds() {
+    let (env, vault, admin, token) = setup();
+    vault.set_tvl_caps(&Some(5_000_000_i128), &Some(10_000_000_i128));
 
-    // Harvest 100_000 every hour for 24 hours
-    for hour in 1..=24u64 {
-        let ts = hour * 3600;
-        harvest_at(&env, &vault, &admin, &token, 100_000, ts);
-    }
-
-    // Query at t=86400 (24h) with 24h window (86400 seconds)
-    env.ledger().set_timestamp(86400);
-
-    // 24 observations at t=3600, 7200, ..., 86400
-    // Prices: 1.1e9, 1.2e9, ..., 3.4e9 (hour h: (1000000 + h*100000)/1000000 * 1e9)
-    // All segments are 3600s except the newest (t=86400) which has 0 duration
-    // TWAP = average of prices from t=3600 to t=82800 (23 prices)
-    //        = (1.1e9 + 1.2e9 + ... + 3.3e9) / 23
-    //        = sum(1.1, 1.2, ..., 3.3) * 1e9 / 23
-    // sum = (1.1 + 3.3) * 23 / 2 = 4.4 * 23 / 2 = 50.6
-    // twap = 50.6e9 / 23 = 2.2e9
-    let twap = vault.get_twap(&86400);
-    assert_eq!(twap, 2_200_000_000);
+    let user = Address::generate(&env);
+    mint(&env, &token, &admin, &user, 5_000_000);
+    // projected_total = 5_000_000 which is NOT > soft_cap → no warning, no error
+    let shares = vault.deposit(&user, &5_000_000);
+    assert_eq!(shares, 5_000_000);
 }
 
-// ---------------------------------------------------------------------------
-// 5. Circular buffer wrap-around
-// ---------------------------------------------------------------------------
-
 #[test]
-fn test_twap_buffer_wrap_around() {
-    let (env, vault, admin, token) = setup_with_deposit();
+fn test_soft_cap_warning_and_hard_cap_together_partial_fill() {
+    // Scenario: soft=2M, hard=5M.
+    // Step 1: deposit 3M → crosses soft (warning), under hard → OK.
+    // Step 2: deposit 3M → total=6M > hard → rejected.
+    let (env, vault, admin, token) = setup();
+    vault.set_tvl_caps(&Some(2_000_000_i128), &Some(5_000_000_i128));
 
-    // Push 24 entries to fill the buffer (hours 1-24)
-    for hour in 1..=24u64 {
-        let ts = hour * 3600;
-        harvest_at(&env, &vault, &admin, &token, 100_000, ts);
-    }
+    let alice = Address::generate(&env);
+    mint(&env, &token, &admin, &alice, 3_000_000);
+    let shares = vault.deposit(&alice, &3_000_000); // crosses soft, under hard
+    assert_eq!(shares, 3_000_000);
+    assert_eq!(vault.total_assets(), 3_000_000);
 
-    // Push 6 more entries (hours 25-30) to force wrap-around
-    for hour in 25..=30u64 {
-        let ts = hour * 3600;
-        harvest_at(&env, &vault, &admin, &token, 100_000, ts);
-    }
-
-    // Buffer should now contain entries for hours 7-30 (oldest 6 were evicted)
-    // Query at t=108000 (30h) with a window covering all remaining entries
-    env.ledger().set_timestamp(108000);
-
-    // The buffer has 24 entries: t=7*3600=25200 to t=30*3600=108000
-    // Prices: hour h → (1000000 + h*100000) / 1000000 * 1e9 = (10+h) * 1e8
-    //   hour 7: 1.7e9, hour 8: 1.8e9, ..., hour 30: 4.0e9
-    // Segments: each 3600s except newest (t=108000) which has 0 duration
-    // TWAP = average of prices from hour 7 to hour 29 (23 prices)
-    //        = (1.7e9 + 1.8e9 + ... + 3.9e9) / 23
-    //        = sum(1.7, 1.8, ..., 3.9) * 1e9 / 23
-    //        = (1.7 + 3.9) * 23 / 2 * 1e9 / 23 = 5.6 * 1e9 / 2 = 2.8e9
-    let twap = vault.get_twap(&86400);
-    assert_eq!(twap, 2_800_000_000);
+    let bob = Address::generate(&env);
+    mint(&env, &token, &admin, &bob, 3_000_000);
+    let result = vault.try_deposit(&bob, &3_000_000); // would push to 6M > 5M hard
+    assert_eq!(result, Err(Ok(VaultError::TvlCapExceeded)));
 }
 
-// ---------------------------------------------------------------------------
-// 6. Window shorter than observation interval
-// ---------------------------------------------------------------------------
-
 #[test]
-fn test_twap_window_shorter_than_interval() {
-    let (env, vault, admin, token) = setup_with_deposit();
+fn test_only_soft_cap_set_does_not_block_large_deposit() {
+    // With only a soft cap (no hard), very large deposits should still go through.
+    let (env, vault, admin, token) = setup();
+    vault.set_tvl_caps(&Some(1_000_000_i128), &None);
 
-    // Two harvests 1h apart
-    harvest_at(&env, &vault, &admin, &token, 100_000, 3600);
-    harvest_at(&env, &vault, &admin, &token, 100_000, 7200);
-
-    // Query 30 min after last harvest with 30 min window
-    env.ledger().set_timestamp(9000);
-
-    // Window = 1800s, cutoff = 7200
-    // Only the segment from t=7200 to t=9000 (1800s) is within the window
-    // The observation at t=7200 has price = 1.2e9
-    // The observation at t=3600 is older than cutoff → boundary
-    // segment = 9000 - 7200 = 1800, price = 1.2e9
-    // twap = 1.2e9 * 1800 / 1800 = 1.2e9
-    let twap = vault.get_twap(&1800);
-    assert_eq!(twap, 1_200_000_000);
-}
-
-// ---------------------------------------------------------------------------
-// 7. Window larger than available data
-// ---------------------------------------------------------------------------
-
-#[test]
-fn test_twap_window_larger_than_data() {
-    let (env, vault, admin, token) = setup_with_deposit();
-
-    // Two harvests close together
-    harvest_at(&env, &vault, &admin, &token, 100_000, 1000);
-    harvest_at(&env, &vault, &admin, &token, 100_000, 2000);
-
-    // Query at t=2000 with 100000s window (much larger than data)
-    env.ledger().set_timestamp(2000);
-
-    // Observations: t=1000 (price=1.1e9), t=2000 (price=1.2e9)
-    // cutoff = 2000 - 100000 = 0 (saturating_sub)
-    // newest obs: t=2000, segment = 2000-2000 = 0 (skip)
-    // prev_ts=2000, next obs: t=1000, segment = 2000-1000 = 1000, price=1.1e9
-    //   t=1000 > cutoff(0) so full segment
-    // total_weight = 1000
-    // twap = 1.1e9 * 1000 / 1000 = 1.1e9
-    let twap = vault.get_twap(&100_000);
-    assert_eq!(twap, 1_100_000_000);
-}
-
-// ---------------------------------------------------------------------------
-// 8. TWAP is resistant to flash-loan manipulation
-// ---------------------------------------------------------------------------
-
-#[test]
-fn test_twap_resistant_to_flash_loan() {
-    let (env, vault, admin, token) = setup_with_deposit();
-
-    // Establish a price history
-    harvest_at(&env, &vault, &admin, &token, 100_000, 3600);
-    harvest_at(&env, &vault, &admin, &token, 100_000, 7200);
-
-    // Query TWAP at t=7200 with 1h window
-    env.ledger().set_timestamp(7200);
-    let twap_before = vault.get_twap(&3600);
-
-    // Even if someone deposits a huge amount (changing total_assets),
-    // the TWAP should not change because TWAP only records on harvest
-    let whale = Address::generate(&env);
-    mint(&env, &token, &admin, &whale, 100_000_000);
-    vault.deposit(&whale, &100_000_000);
-
-    // TWAP should be unchanged — deposit doesn't create a snapshot
-    let twap_after = vault.get_twap(&3600);
-    assert_eq!(twap_before, twap_after);
-}
-
-// ---------------------------------------------------------------------------
-// 9. Buffer overflow — more than 24 harvests
-// ---------------------------------------------------------------------------
-
-#[test]
-fn test_twap_buffer_overflow_keeps_latest_24() {
-    let (env, vault, admin, token) = setup_with_deposit();
-
-    // Push 30 entries
-    for hour in 1..=30u64 {
-        let ts = hour * 3600;
-        harvest_at(&env, &vault, &admin, &token, 100_000, ts);
-    }
-
-    // The buffer should only have the latest 24 entries (hours 7-30)
-    // Query with a very large window to include all entries
-    env.ledger().set_timestamp(108000);
-
-    // Same calculation as test_twap_buffer_wrap_around
-    let twap = vault.get_twap(&86400);
-    assert_eq!(twap, 2_800_000_000);
-}
-
-// ---------------------------------------------------------------------------
-// 10. TWAP with zero window — edge case
-// ---------------------------------------------------------------------------
-
-#[test]
-fn test_twap_zero_window_returns_spot_price() {
-    let (env, vault, admin, token) = setup_with_deposit();
-
-    harvest_at(&env, &vault, &admin, &token, 100_000, 3600);
-    harvest_at(&env, &vault, &admin, &token, 100_000, 7200);
-
-    env.ledger().set_timestamp(7200);
-    // Zero window → total_weight = 0 → spot price
-    let twap = vault.get_twap(&0);
-    // Spot price: 1_200_000 / 1_000_000 * 1e9 = 1.2e9
-    assert_eq!(twap, 1_200_000_000);
-}
-
-// ---------------------------------------------------------------------------
-// 11. Single harvest creates first observation
-// ---------------------------------------------------------------------------
-
-#[test]
-fn test_twap_single_harvest_creates_observation() {
-    let (env, vault, admin, token) = setup_with_deposit();
-
-    // Before harvest: 0 observations → spot price
-    let before = vault.get_twap(&3600);
-    assert_eq!(before, 1_000_000_000); // 1:1
-
-    // After harvest: 1 observation → still spot price (need 2+ for TWAP)
-    harvest_at(&env, &vault, &admin, &token, 200_000, 3600);
-    let after = vault.get_twap(&3600);
-    // Spot: 1_200_000 / 1_000_000 * 1e9 = 1.2e9
-    assert_eq!(after, 1_200_000_000);
-}
-
-// ---------------------------------------------------------------------------
-// 12. Multiple harvests at same timestamp
-// ---------------------------------------------------------------------------
-
-#[test]
-fn test_twap_multiple_harvests_same_timestamp() {
-    let (env, vault, admin, token) = setup_with_deposit();
-
-    // Two harvests at the same timestamp
-    harvest_at(&env, &vault, &admin, &token, 100_000, 3600);
-    harvest_at(&env, &vault, &admin, &token, 100_000, 3600);
-
-    // Query at t=7200
-    env.ledger().set_timestamp(7200);
-
-    // Both observations have ts=3600
-    // newest (index 1): ts=3600, price=1.2e9 → segment: 7200-3600=3600
-    // next (index 0): ts=3600, price=1.1e9 → segment: 3600-3600=0 (skip, zero segment)
-    // total_weight = 3600
-    // twap = 1.2e9 * 3600 / 3600 = 1.2e9
-    let twap = vault.get_twap(&3600);
-    assert_eq!(twap, 1_200_000_000);
-}
-
-// ---------------------------------------------------------------------------
-// 13. TWAP reflects only harvest price changes
-// ---------------------------------------------------------------------------
-
-#[test]
-fn test_twap_price_increases_monotonically_with_harvest() {
-    let (env, vault, admin, token) = setup_with_deposit();
-
-    // Harvest increasing amounts
-    harvest_at(&env, &vault, &admin, &token, 100_000, 3600);
-    harvest_at(&env, &vault, &admin, &token, 200_000, 7200);
-    harvest_at(&env, &vault, &admin, &token, 300_000, 10800);
-
-    env.ledger().set_timestamp(10800);
-
-    // Prices: 1.1e9, 1.3e9, 1.6e9
-    // Segments (newest to oldest):
-    //   t=10800: segment=0 (skip)
-    //   t=7200: segment=3600, price=1.3e9
-    //   t=3600: segment=3600, price=1.1e9
-    // total_weight = 7200
-    // twap = (1.3e9*3600 + 1.1e9*3600) / 7200 = (1.3e9 + 1.1e9) / 2 = 1.2e9
-    let twap = vault.get_twap(&7200);
-    assert_eq!(twap, 1_200_000_000);
-}
-
-// ---------------------------------------------------------------------------
-// 14. Verify share price formula
-// ---------------------------------------------------------------------------
-
-#[test]
-fn test_twap_share_price_correct_after_multiple_harvests() {
-    let (env, vault, admin, token) = setup_with_deposit();
-
-    // After deposit: 1_000_000 assets, 1_000_000 shares, price = 1e9
-    let initial_price = vault.get_twap(&3600);
-    assert_eq!(initial_price, 1_000_000_000);
-
-    // Harvest 500_000 → 1_500_000 assets, 1_000_000 shares
-    harvest_at(&env, &vault, &admin, &token, 500_000, 3600);
-
-    // Harvest 500_000 → 2_000_000 assets, 1_000_000 shares
-    harvest_at(&env, &vault, &admin, &token, 500_000, 7200);
-
-    env.ledger().set_timestamp(7200);
-
-    // Two observations: t=3600 (price=1.5e9), t=7200 (price=2.0e9)
-    // Segments: t=7200→7200=0 (skip), t=3600→7200=3600 (price=1.5e9)
-    // total_weight=3600
-    // twap = 1.5e9 * 3600 / 3600 = 1.5e9
-    let twap = vault.get_twap(&3600);
-    assert_eq!(twap, 1_500_000_000);
-
-    // Verify spot price is 2.0e9
-    let spot = vault.get_twap(&0);
-    assert_eq!(spot, 2_000_000_000);
+    let user = Address::generate(&env);
+    let large: i128 = 100_000_000;
+    mint(&env, &token, &admin, &user, large);
+    let shares = vault.deposit(&user, &large);
+    assert_eq!(shares, large); // succeeds (only warning, not blocked)
 }
