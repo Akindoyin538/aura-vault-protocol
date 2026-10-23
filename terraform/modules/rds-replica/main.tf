@@ -33,6 +33,7 @@ terraform {
 # Fetch the primary instance so we can inherit its configuration
 # ---------------------------------------------------------------------------
 data "aws_db_instance" "primary" {
+  count                  = var.primary_instance_arn == "" ? 1 : 0
   db_instance_identifier = var.primary_instance_id
 }
 
@@ -44,13 +45,15 @@ resource "aws_db_instance" "replica" {
   identifier = "${var.primary_instance_id}-replica-${var.environment}"
 
   # Replicate from the primary — this implicitly sets the engine and version
-  replicate_source_db = var.primary_instance_id
+  replicate_source_db = var.primary_instance_arn != "" ? var.primary_instance_arn : var.primary_instance_id
 
   # Allow override of compute; falls back to the primary's class
-  instance_class = var.instance_class != "" ? var.instance_class : data.aws_db_instance.primary.db_instance_class
+  instance_class = var.instance_class != "" ? var.instance_class : (
+    var.primary_instance_arn != "" ? var.primary_instance_class : data.aws_db_instance.primary[0].db_instance_class
+  )
 
   # Place the replica in a distinct AZ from the primary for HA reads
-  availability_zone = var.availability_zone
+  availability_zone = var.availability_zone != "" ? var.availability_zone : null
 
   # Replicas are never publicly accessible
   publicly_accessible = false
@@ -58,6 +61,7 @@ resource "aws_db_instance" "replica" {
   # Inherit storage type and encryption from the primary
   storage_type      = "gp3"
   storage_encrypted = true
+  kms_key_id        = var.kms_key_id != "" ? var.kms_key_id : null
 
   # Enhanced monitoring — same 60-second granularity as the primary
   monitoring_interval = 60

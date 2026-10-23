@@ -150,9 +150,9 @@ jobs:
       - name: Wait for frontend to be ready
         run: npx wait-on http://localhost:3000 --timeout 60000
 
-      - name: Run Playwright deposit flow tests (Chrome, Firefox, WebKit)
+      - name: Run Playwright deposit flow and accessibility tests (Chrome, Firefox, WebKit)
         run: |
-          npx playwright test playwright/deposit-flow.spec.ts \
+          npx playwright test playwright/deposit-flow.spec.ts playwright/accessibility.spec.ts \
             --project=chromium \
             --project=firefox \
             --project=webkit

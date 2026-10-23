@@ -13,8 +13,8 @@
 mod security_tests {
     extern crate std;
 
-    use soroban_sdk::{testutils::Address as _, Address, Env, Vec};
     use soroban_sdk::token::StellarAssetClient;
+    use soroban_sdk::{testutils::Address as _, Address, Env, Vec};
 
     use crate::{AuraVault, AuraVaultClient, VaultError};
 
@@ -26,11 +26,19 @@ mod security_tests {
         let env = Env::default();
         env.mock_all_auths();
         let admin = Address::generate(&env);
-        let token_addr = env.register_stellar_asset_contract_v2(admin.clone()).address();
+        let token_addr = env
+            .register_stellar_asset_contract_v2(admin.clone())
+            .address();
         let vault_addr = env.register_contract(None, AuraVault);
         let vault = AuraVaultClient::new(&env, &vault_addr);
         let signers: Vec<Address> = Vec::new(&env);
-        vault.initialize(&admin, &token_addr, &signers, &soroban_sdk::String::from_str(&env, "AuraVault"), &soroban_sdk::String::from_str(&env, "AURA"));
+        vault.initialize(
+            &admin,
+            &token_addr,
+            &signers,
+            &soroban_sdk::String::from_str(&env, "AuraVault"),
+            &soroban_sdk::String::from_str(&env, "AURA"),
+        );
         vault.set_fees(&admin, &0_u32, &0_u32);
         (env, vault, admin, token_addr)
     }
@@ -239,7 +247,7 @@ mod security_tests {
     fn test_access_control_double_initialize_rejected() {
         let (env, vault, admin, token) = setup();
         let signers: Vec<Address> = Vec::new(&env);
-        let result = vault.try_initialize(&admin, &token, &signers);
+        let result = vault.try_initialize(&admin, &token, &signers, &0_u32);
         assert_eq!(result, Err(Ok(VaultError::AlreadyInitialized)));
     }
 
@@ -278,8 +286,7 @@ mod security_tests {
         // Attacker directly transfers tokens into the vault bypassing deposit.
         let vault_addr = env.register_contract(None, AuraVault);
         mint(&env, &token, &admin, &attacker, 1_000_000);
-        soroban_sdk::token::Client::new(&env, &token)
-            .transfer(&attacker, &vault_addr, &1_000_000);
+        soroban_sdk::token::Client::new(&env, &token).transfer(&attacker, &vault_addr, &1_000_000);
 
         // Now the real vault's balance == 0 (different contract address),
         // but let's test with the actual vault: seed legitimate state first
@@ -292,8 +299,7 @@ mod security_tests {
         // Inject extra tokens directly (simulating flash-loan manipulation).
         let vault2_addr = vault2.address.clone();
         mint(&env2, &token2, &admin2, &user, 100_000);
-        soroban_sdk::token::Client::new(&env2, &token2)
-            .transfer(&user, &vault2_addr, &100_000);
+        soroban_sdk::token::Client::new(&env2, &token2).transfer(&user, &vault2_addr, &100_000);
 
         // Next deposit must detect the mismatch.
         let depositor = Address::generate(&env2);
@@ -313,8 +319,7 @@ mod security_tests {
         // Inject extra tokens.
         let vault_addr = vault.address.clone();
         mint(&env, &token, &admin, &user, 1);
-        soroban_sdk::token::Client::new(&env, &token)
-            .transfer(&user, &vault_addr, &1);
+        soroban_sdk::token::Client::new(&env, &token).transfer(&user, &vault_addr, &1);
 
         let shares = vault.balance_of(&user);
         let result = vault.try_withdraw(&user, &shares);
@@ -332,8 +337,7 @@ mod security_tests {
         // Inject extra tokens.
         let vault_addr = vault.address.clone();
         mint(&env, &token, &admin, &user, 1);
-        soroban_sdk::token::Client::new(&env, &token)
-            .transfer(&user, &vault_addr, &1);
+        soroban_sdk::token::Client::new(&env, &token).transfer(&user, &vault_addr, &1);
 
         let keeper = Address::generate(&env);
         mint(&env, &token, &admin, &keeper, 1_000);
@@ -355,8 +359,7 @@ mod security_tests {
         let vault_addr = vault.address.clone();
         let attacker = Address::generate(&env);
         mint(&env, &token, &admin, &attacker, 9_000_000);
-        soroban_sdk::token::Client::new(&env, &token)
-            .transfer(&attacker, &vault_addr, &9_000_000);
+        soroban_sdk::token::Client::new(&env, &token).transfer(&attacker, &vault_addr, &9_000_000);
 
         mint(&env, &token, &admin, &attacker, 100);
         let result = vault.try_deposit(&attacker, &100, &None);

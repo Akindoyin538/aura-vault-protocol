@@ -94,9 +94,13 @@ resource "aws_route53_record" "www" {
   depends_on = [aws_acm_certificate_validation.main]
 }
 
-# Route53 Record for API subdomain
+locals {
+  dr_api_failover_enabled = var.enable_dns_failover && var.domain_name != "" && var.dr_alb_dns_name != "" && var.dr_alb_zone_id != ""
+}
+
+# Route53 Record for API subdomain when DR is not configured.
 resource "aws_route53_record" "api" {
-  count = var.domain_name != "" ? 1 : 0
+  count = var.domain_name != "" && !local.dr_api_failover_enabled ? 1 : 0
   
   zone_id = aws_route53_zone.main[0].zone_id
   name    = "api.${var.domain_name}"
@@ -154,10 +158,10 @@ resource "aws_route53_health_check" "alb" {
 
 # DNS Failover Configuration
 resource "aws_route53_record" "failover_primary" {
-  count = var.enable_dns_failover ? 1 : 0
+  count = local.dr_api_failover_enabled ? 1 : 0
   
   zone_id = aws_route53_zone.main[0].zone_id
-  name    = "failover.${var.domain_name}"
+  name    = "api.${var.domain_name}"
   type    = "A"
   
   alias {
@@ -176,16 +180,16 @@ resource "aws_route53_record" "failover_primary" {
 }
 
 resource "aws_route53_record" "failover_secondary" {
-  count = var.enable_dns_failover ? 1 : 0
+  count = local.dr_api_failover_enabled ? 1 : 0
   
   zone_id = aws_route53_zone.main[0].zone_id
-  name    = "failover.${var.domain_name}"
+  name    = "api.${var.domain_name}"
   type    = "A"
   
   alias {
-    name                   = "s3-website-us-east-1.amazonaws.com"
-    zone_id                = "Z3AQBSTGFYJPTF"
-    evaluate_target_health = false
+    name                   = var.dr_alb_dns_name
+    zone_id                = var.dr_alb_zone_id
+    evaluate_target_health = true
   }
   
   failover_routing_policy {

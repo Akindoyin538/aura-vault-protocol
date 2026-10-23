@@ -23,6 +23,16 @@ output "alb_zone_id" {
   value       = aws_lb.main.zone_id
 }
 
+output "canary_target_group_arn" {
+  description = "Target group ARN for the separately versioned canary backend."
+  value       = aws_lb_target_group.backend_canary.arn
+}
+
+output "canary_error_rate_alarm_name" {
+  description = "CloudWatch alarm used by the canary promotion workflow."
+  value       = aws_cloudwatch_metric_alarm.canary_error_rate.alarm_name
+}
+
 output "cloudfront_distribution_id" {
   description = "ID of the CloudFront distribution"
   value       = var.enable_cloudfront ? aws_cloudfront_distribution.main[0].id : null
@@ -37,6 +47,16 @@ output "rds_endpoint" {
   description = "RDS instance endpoint"
   value       = aws_db_instance.main.endpoint
   sensitive   = true
+}
+
+output "rds_instance_arn" {
+  description = "ARN of the production RDS instance, used by the cross-region disaster-recovery replica."
+  value       = aws_db_instance.main.arn
+}
+
+output "rds_monitoring_role_arn" {
+  description = "IAM role ARN used for RDS Enhanced Monitoring in the primary and DR regions."
+  value       = aws_iam_role.rds_monitoring.arn
 }
 
 output "s3_bucket_name" {
