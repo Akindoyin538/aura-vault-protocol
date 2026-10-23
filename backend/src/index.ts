@@ -60,6 +60,7 @@ import { vaultTransactionRouter } from "./routes/vaultTransactionRoutes.js";
 import { vaultRegistryRouter } from "./routes/vaultRegistryRoutes.js";
 import { startVaultSyncJob, stopVaultSyncJob } from "./services/vaultRegistryService.js";
 import { vaultSubmitRouter } from "./routes/vaultSubmitRoutes.js";
+import { balanceOfRouter } from "./routes/balanceOfRoutes.js";
 import { userPreferencesRouter } from "./routes/userPreferencesRoutes.js";
 import { leaderboardRouter } from "./routes/leaderboardRoutes.js";
 import { referralRouter } from "./routes/referralRoutes.js";
@@ -214,6 +215,8 @@ app.use("/api/v1/vaults", vaultRegistryRouter);
 
 // Vault transaction submit — lightweight UI modal endpoint
 app.use("/api/vault/transactions", vaultSubmitRouter);
+// Public read-only account share lookup used by portfolio analysis.
+app.use("/api/vault", balanceOfRouter);
 
 // Referral tracking — public routes (register, stats, deposit webhook)
 app.use("/api/referrals", referralRouter);

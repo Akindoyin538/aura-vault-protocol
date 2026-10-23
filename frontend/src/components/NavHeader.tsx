@@ -7,6 +7,8 @@ import { usePathname } from "next/navigation";
 const NAV_LINKS = [
   { label: "Dashboard", href: "/dashboard" },
   { label: "Portfolio", href: "/portfolio" },
+  { label: "Position analyser", href: "/portfolio/analyzer" },
+  { label: "Transactions", href: "/transactions" },
   { label: "Docs", href: "https://docs.aura.finance", external: true },
 ] as const;
 
