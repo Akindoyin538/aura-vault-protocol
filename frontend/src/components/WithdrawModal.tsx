@@ -105,7 +105,7 @@ function Spinner() {
 
 const STEP_LABELS: Record<WithdrawStep, string> = {
   1: "Shares",
-  2: "Review",
+  2: "Fees",
   3: "Result",
 };
 
@@ -360,7 +360,7 @@ export function WithdrawModal({
 
   const titleMap: Record<WithdrawStep, string> = {
     1: "Withdraw",
-    2: "Review Withdrawal",
+    2: "Fee Breakdown",
     3:
       txStatus === "success"
         ? "Withdrawal Successful"
@@ -481,7 +481,7 @@ export function WithdrawModal({
         </div>
       )}
 
-      {/* ── Step 2: Review ───────────────────────────────────────────────── */}
+      {/* ── Step 2: Fee Breakdown (#885) ────────────────────────────────── */}
       {step === 2 && (
         <div className="flex flex-col gap-5">
           {quoteError && <p role="alert" className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">{quoteError}</p>}
