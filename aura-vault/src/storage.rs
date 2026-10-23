@@ -2,12 +2,20 @@ use crate::errors::VaultError;
 use soroban_sdk::{contracttype, Address, Env, Vec};
 
 #[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VaultState {
+    pub total_assets: i128,
+    pub total_shares: i128,
+}
+
+#[contracttype]
 pub enum DataKey {
     Initialized,
     Admin,
     UnderlyingToken,
     TotalShares,
     TotalDeposited,
+    VaultState,
     Balance(Address),
     Version,
     LayoutVersion,
@@ -214,6 +222,23 @@ pub fn set_dex_router(env: &Env, router: Option<&Address>) {
     }
 }
 
+pub fn get_vault_state(env: &Env) -> VaultState {
+    if let Some(state) = env.storage().instance().get(&DataKey::VaultState) {
+        state
+    } else {
+        VaultState {
+            total_assets: env.storage().instance().get(&DataKey::TotalDeposited).unwrap_or(0),
+            total_shares: env.storage().instance().get(&DataKey::TotalShares).unwrap_or(0),
+        }
+    }
+}
+
+pub fn set_vault_state(env: &Env, state: &VaultState) {
+    env.storage().instance().set(&DataKey::VaultState, state);
+    env.storage().instance().set(&DataKey::TotalDeposited, &state.total_assets);
+    env.storage().instance().set(&DataKey::TotalShares, &state.total_shares);
+}
+
 pub fn get_total_shares(env: &Env) -> i128 {
     env.storage()
         .instance()
@@ -222,7 +247,9 @@ pub fn get_total_shares(env: &Env) -> i128 {
 }
 
 pub fn set_total_shares(env: &Env, val: i128) {
-    env.storage().instance().set(&DataKey::TotalShares, &val);
+    let mut state = get_vault_state(env);
+    state.total_shares = val;
+    set_vault_state(env, &state);
 }
 
 pub fn get_total_deposited(env: &Env) -> i128 {
@@ -233,7 +260,9 @@ pub fn get_total_deposited(env: &Env) -> i128 {
 }
 
 pub fn set_total_deposited(env: &Env, val: i128) {
-    env.storage().instance().set(&DataKey::TotalDeposited, &val);
+    let mut state = get_vault_state(env);
+    state.total_assets = val;
+    set_vault_state(env, &state);
 }
 
 pub fn get_yield_vesting_pending(env: &Env) -> i128 {

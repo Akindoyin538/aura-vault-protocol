@@ -37,6 +37,7 @@ mod interface;
 mod storage;
 
 pub use errors::VaultError;
+pub use storage::VaultState;
 
 #[cfg(test)]
 mod cei_fuzz_test;
@@ -117,6 +118,7 @@ use storage::{
     get_total_deposited, get_total_shares, get_version, is_paused as storage_is_paused, set_admin,
     set_balance, set_layout_version, set_paused, set_token, set_total_deposited, set_total_shares,
     set_version, CURRENT_LAYOUT_VERSION,
+    get_vault_state, set_vault_state, VaultState,
     get_tvl_cap, set_tvl_cap,
     get_last_harvest_time, set_last_harvest_time,
     get_harvest_cooldown_secs, set_harvest_cooldown_secs,
@@ -657,7 +659,9 @@ impl AuraVault {
 
             // Flash-loan guard: actual token balance must equal tracked state before deposit.
             let balance_before = token.balance(&env.current_contract_address());
-            let total_deposited = get_total_deposited(&env);
+            let vault_state = get_vault_state(&env);
+            let total_deposited = vault_state.total_assets;
+            let total_shares = vault_state.total_shares;
             if balance_before != total_deposited {
                 env.events().publish(
                     (Symbol::new(&env, "suspicious"),),
@@ -722,7 +726,6 @@ impl AuraVault {
             let new_total_shares = total_shares
                 .checked_add(new_shares)
                 .ok_or(VaultError::MathOverflow)?;
-            set_total_shares(&env, new_total_shares);
             let new_total_deposited = total_deposited
                 .checked_add(amount)
                 .ok_or(VaultError::MathOverflow)?;
@@ -1150,7 +1153,9 @@ impl AuraVault {
             let token = token::Client::new(&env, &token_addr);
 
             let balance_before = token.balance(&env.current_contract_address());
-            let total_deposited = get_total_deposited(&env);
+            let vault_state = get_vault_state(&env);
+            let total_deposited = vault_state.total_assets;
+            let total_shares = vault_state.total_shares;
             if balance_before != total_deposited {
                 env.events().publish(
                     (Symbol::new(&env, "suspicious"),),
@@ -1217,7 +1222,6 @@ impl AuraVault {
             let new_total_shares = total_shares
                 .checked_sub(shares)
                 .ok_or(VaultError::MathOverflow)?;
-            set_total_shares(&env, new_total_shares);
             storage::set_user_checkpoint(&env, &caller, storage::get_cumulative_yps(&env));
             storage::set_user_pending_yield(
                 &env,
@@ -1227,7 +1231,10 @@ impl AuraVault {
             let new_total_deposited = total_deposited
                 .checked_sub(redeem_amount)
                 .ok_or(VaultError::MathOverflow)?;
-            set_total_deposited(&env, new_total_deposited);
+            set_vault_state(&env, &VaultState {
+                total_assets: new_total_deposited,
+                total_shares: new_total_shares,
+            });
 
             bump_persistent(&env, &caller);
             bump_instance(&env);
@@ -1730,7 +1737,9 @@ impl AuraVault {
                 return Err(VaultError::Unauthorized);
             }
 
-            let total_shares = get_total_shares(&env);
+            let vault_state = get_vault_state(&env);
+            let total_shares = vault_state.total_shares;
+            let total_deposited = vault_state.total_assets;
             if total_shares == 0 {
                 return Err(VaultError::ZeroShares);
             }
