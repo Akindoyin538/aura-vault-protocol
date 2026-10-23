@@ -95,10 +95,20 @@ Reviewers must verify the changelog entry as part of the PR review.
 ## [Unreleased]
 
 ### Added
+- **Python integration examples** (`docs/integration-python.md`) — executable REST authentication, vault stats, yield calculation, Soroban deposit submission, confirmation polling, and retry patterns.
+- **Multi-vault architecture decision record** (`docs/adr/ADR-003-multi-vault-factory-pattern.md`) — documents the current independent-instance deployment model and the trade-offs and risks of introducing an on-chain factory.
+- **Changelog pull request check** — requires a `[Unreleased]` entry when backend or frontend code changes.
+- **Vault contract governance and operations** — multi-signature proposals, pause and circuit-breaker controls, storage/version inspection, migration guidance, and harvest economics documentation.
+- **Backend API and operations** — vault statistics and history, authenticated transaction submission, admin audit and upgrade endpoints, webhook delivery, rate limits, and service health monitoring.
+- **Frontend vault workflows** — dashboard and portfolio views, accessible transaction and wallet flows, responsive navigation, localization, and history exports.
+- **Deployment and reliability automation** — Kubernetes deployment guidance, testnet deployment, migration safety checks, network isolation, disaster-recovery replication, and chaos workflows.
 - **Kubernetes deployment guide** (`docs/KUBERNETES.md`) — full K8s manifests reference for namespaces, RBAC, network policies, HPA, PostgreSQL, Redis, monitoring stack, Sealed Secrets, and Ingress. Closes #397.
 - **Monitoring & Alerting Runbook** (`docs/OPERATIONS_RUNBOOK.md`) — one runbook entry per Prometheus alert, incident commander checklist, escalation matrix, Loki log queries, and PIR template. Closes #398.
 - **FAQ document** (`docs/faq.md`) — 45 Q&A pairs covering getting started, deposits, withdrawals, yield & harvests, shares & pricing, fees, security, and technical topics. Closes #396.
 - **Versioning policy** (this section) — MAJOR/MINOR/PATCH criteria for contract, API, and frontend; PR merge requirements; git tagging convention. Closes #399.
+
+### Changed
+- **Stellar deployment instructions** — require Stellar CLI v21.3.0+, use the `stellar` command and `--source` identity syntax, and reject older CLI versions in deployment scripts.
 
 ---
 
