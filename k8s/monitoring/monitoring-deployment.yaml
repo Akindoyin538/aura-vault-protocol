@@ -1,11 +1,4 @@
 apiVersion: v1
-kind: Namespace
-metadata:
-  name: monitoring
-  labels:
-    name: monitoring
----
-apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: prometheus
@@ -65,7 +58,7 @@ data:
       evaluation_interval: 15s
       external_labels:
         cluster: 'aura-vault-k8s'
-        environment: 'production'
+        environment: 'aura-vault'
 
     rule_files:
       - '/etc/prometheus/sla-rules.yml'
