@@ -1,5 +1,6 @@
 use soroban_sdk::{Address, Env, Vec, Symbol, BytesN, String};
 use crate::errors::VaultError;
+use crate::InvariantCheckResult;
 
 /// Public ABI for AuraVault.
 ///
@@ -23,8 +24,8 @@ use crate::errors::VaultError;
 /// | `unpause` | `("unpaused",)` | `()` |
 /// | `upgrade` | `("upgrade", admin)` | `(old_version, new_version)` |
 /// | `withdraw_fees` | `("fees_withdrawn", admin)` | `(fees, treasury)` |
-/// | `propose_admin` | `("AdminProposed", admin)` | `(new_admin, expiry_timestamp)` |
-/// | `accept_admin` | `("AdminTransferred", old_admin)` | `(new_admin,)` |
+/// | `propose_admin` | `("admin_proposed",)` | `(current_admin, new_admin, expiry_timestamp)` |
+/// | `accept_admin` | `("admin_transferred",)` | `(new_admin,)` |
 /// | `cancel_admin` | `("AdminCancelled", admin)` | `()` |
 /// | `grant_role` | `("RoleGranted", admin)` | `(role, addr)` |
 /// | `revoke_role` | `("RoleRevoked", admin)` | `(role, addr)` |
@@ -34,7 +35,8 @@ pub trait AuraVaultTrait {
     /// Initialise the vault.
     ///
     /// Must be called exactly once after the contract is deployed. Sets the
-    /// admin address, the underlying token, and the governance signer list.
+    /// admin address, the underlying token, and the governance signer list,
+    /// using the default share name and symbol.
     /// All subsequent calls return [`VaultError::AlreadyInitialized`].
     ///
     /// # Parameters
@@ -53,6 +55,17 @@ pub trait AuraVaultTrait {
     /// - [`VaultError::AlreadyInitialized`] — vault has already been initialised.
     fn initialize(env: Env, admin: Address, underlying_token: Address, signers: Vec<Address>, decimals: u32) -> Result<(), VaultError>;
 
+    /// Initialise with immutable SEP-41 share metadata.
+    fn initialize_with_metadata(
+        env: Env,
+        admin: Address,
+        underlying_token: Address,
+        signers: Vec<Address>,
+        decimals: u32,
+        name: String,
+        symbol: String,
+    ) -> Result<(), VaultError>;
+
     /// Deposit underlying tokens and receive proportional vault shares.
     ///
     /// Transfers `amount` of the underlying token from `caller` to the vault,
@@ -64,7 +77,9 @@ pub trait AuraVaultTrait {
     /// ```
     ///
     /// Enforces the flash-loan guard (actual balance == tracked balance) before
-    /// executing. Emits a `deposit` event on success.
+    /// executing. If `referrer` is `Some(addr)` and `addr != caller`, increments
+    /// the on-chain referral count for `addr` and emits a `deposit_with_referral`
+    /// event in addition to the standard `deposit` event.
     ///
     /// # Parameters
     ///
@@ -72,6 +87,9 @@ pub trait AuraVaultTrait {
     /// - `caller` — Address depositing tokens. Must authorise this call.
     /// - `amount` — Number of underlying tokens to deposit (in the token's
     ///   smallest unit, i.e. stroops for a 7-decimal token). Must be > 0.
+    /// - `nonce` — Per-address replay-protection counter.  Must equal the
+    ///   value returned by `get_nonce(caller)` at the time of signing.
+    ///   Incremented atomically on every successful deposit.
     ///
     /// # Returns
     ///
@@ -85,15 +103,53 @@ pub trait AuraVaultTrait {
     /// - [`VaultError::VaultPaused`] — vault is currently paused.
     /// - [`VaultError::BalanceMismatch`] — flash-loan guard tripped.
     /// - [`VaultError::MathOverflow`] — arithmetic overflow in share formula.
+    /// - [`VaultError::InvalidNonce`] — supplied nonce does not match stored nonce.
     ///
     /// # Examples
     ///
     /// ```no_run
     /// // In a Soroban test environment:
-    /// // let shares = vault_client.deposit(&caller, &1_000_000_i128);
+    /// // let nonce = vault_client.get_nonce(&caller);
+    /// // let shares = vault_client.deposit(&caller, &1_000_000_i128, &nonce);
     /// // assert!(shares > 0);
     /// ```
-    fn deposit(env: Env, caller: Address, amount: i128) -> Result<i128, VaultError>;
+    fn deposit(env: Env, caller: Address, amount: i128, nonce: u64) -> Result<i128, VaultError>;
+
+    /// Swap an alternate token into the configured underlying token and mint shares.
+    fn deposit_with_swap(
+        env: Env,
+        caller: Address,
+        input_token: Address,
+        input_amount: i128,
+        min_shares: i128,
+    ) -> Result<i128, VaultError>;
+
+    /// Configure the optional DEX router used by `deposit_with_swap`.
+    fn set_dex_router(env: Env, admin: Address, router: Option<Address>) -> Result<(), VaultError>;
+
+    /// Transfer shares to another address.
+    fn transfer(env: Env, from: Address, to: Address, shares: i128) -> Result<(), VaultError>;
+
+    /// Set a time-limited share allowance.
+    fn approve(
+        env: Env,
+        from: Address,
+        spender: Address,
+        shares: i128,
+        expiration_ledger: u32,
+    ) -> Result<(), VaultError>;
+
+    /// Read an unexpired share allowance.
+    fn allowance(env: Env, from: Address, spender: Address) -> i128;
+
+    /// Transfer shares using the owner's allowance.
+    fn transfer_from(
+        env: Env,
+        spender: Address,
+        from: Address,
+        to: Address,
+        shares: i128,
+    ) -> Result<(), VaultError>;
 
     /// Burn vault shares and redeem the proportional underlying tokens.
     ///
@@ -136,6 +192,53 @@ pub trait AuraVaultTrait {
     /// ```
     fn withdraw(env: Env, caller: Address, shares: i128) -> Result<i128, VaultError>;
 
+    /// Emergency withdrawal of underlying tokens during a vault pause.
+    ///
+    /// Allows users to redeem their shares and recover underlying tokens even
+    /// while the vault is paused. This provides a guaranteed exit path during
+    /// an emergency without requiring the admin to unpause first.
+    ///
+    /// Key differences from [`withdraw`]:
+    /// - **Requires the vault to be paused** — returns
+    ///   [`VaultError::VaultNotPaused`] when the vault is operating normally.
+    ///   Use the regular [`withdraw`] function when the vault is unpaused.
+    /// - **No harvest step** — yield is not auto-compounded before redemption.
+    /// - **Fee waived** — no performance or withdrawal fee is charged.
+    /// - **Emits `emergency_withdrawal` event** (not `withdraw`).
+    ///
+    /// Calculates the redemption amount using:
+    ///
+    /// ```text
+    /// redeem_amount = floor(shares × total_deposited / total_shares)
+    /// ```
+    ///
+    /// Follows strict **CEI** ordering: shares are burned and state is written
+    /// *before* the token transfer to prevent reentrancy.
+    ///
+    /// # Parameters
+    ///
+    /// - `env` — Soroban execution environment.
+    /// - `caller` — Address redeeming shares. Must authorise this call.
+    /// - `shares` — Number of vault shares to burn. Must be > 0 and ≤
+    ///   `balance_of(caller)`.
+    ///
+    /// # Returns
+    ///
+    /// The number of underlying tokens transferred to `caller`.
+    ///
+    /// # Errors
+    ///
+    /// - [`VaultError::ZeroAmount`] — `shares <= 0`, or redemption rounds to zero.
+    /// - [`VaultError::NotInitialized`] — vault has not been initialised.
+    /// - [`VaultError::VaultNotPaused`] — vault is not currently paused; use
+    ///   the normal [`withdraw`] function.
+    /// - [`VaultError::InsufficientShares`] — caller holds fewer shares than requested.
+    /// - [`VaultError::InsufficientUnderlying`] — vault balance cannot cover redemption.
+    /// - [`VaultError::MathOverflow`] — arithmetic overflow.
+    ///
+    /// [`withdraw`]: AuraVaultTrait::withdraw
+    fn emergency_withdraw(env: Env, caller: Address, shares: i128) -> Result<i128, VaultError>;
+
     /// Inject yield tokens into the vault without minting new shares.
     ///
     /// Any caller (keeper) may call this to increase `total_deposited`, which
@@ -158,6 +261,12 @@ pub trait AuraVaultTrait {
     /// - [`VaultError::BalanceMismatch`] — flash-loan guard tripped.
     /// - [`VaultError::MathOverflow`] — arithmetic overflow.
     fn harvest(env: Env, caller: Address, yield_amount: i128) -> Result<(), VaultError>;
+
+    /// Configure the global linear yield vesting period in ledgers (default: 120,960).
+    fn set_yield_vesting_period(env: Env, admin: Address, ledgers: u32) -> Result<(), VaultError>;
+
+    /// Return the global linear yield vesting period in ledgers.
+    fn get_yield_vesting_period(env: Env) -> u32;
 
     /// Distribute underlying-token yield proportionally to all shareholders via
     /// the cumulative yield-per-share accumulator.
@@ -188,6 +297,15 @@ pub trait AuraVaultTrait {
 
     /// Return the current distribution epoch counter.
     fn distribution_epoch(env: Env) -> u64;
+
+    /// Return the start timestamp of the current harvest epoch.
+    fn epoch_start_timestamp(env: Env) -> u64;
+
+    /// Return the most recent deposit timestamp for an address.
+    fn deposit_timestamp(env: Env, addr: Address) -> u64;
+
+    /// Return the harvest epoch of an address's most recent deposit.
+    fn deposit_epoch(env: Env, addr: Address) -> u64;
 
     /// Halt all mutating operations (deposit, withdraw, harvest).
     ///
@@ -366,6 +484,18 @@ pub trait AuraVaultTrait {
     /// - `address` — The Stellar account address to query.
     fn balance_of(env: Env, address: Address) -> i128;
 
+    /// Enumerate all non-expired governance proposals.
+    fn get_proposals(env: Env) -> Vec<crate::ProposalView>;
+
+    /// Read one governance proposal.
+    fn get_proposal(env: Env, id: u64) -> Option<crate::ProposalView>;
+
+    /// Read the instance's stored storage layout version.
+    fn storage_layout_version(env: Env) -> u32;
+
+    /// Return error 10 when the instance layout does not match this Wasm.
+    fn validate_storage_layout_version(env: Env) -> Result<(), VaultError>;
+
     /// Upgrade the contract's Wasm binary.
     ///
     /// Admin-only. Increments the contract version, replaces the on-chain Wasm
@@ -474,6 +604,9 @@ pub trait AuraVaultTrait {
     /// - [`VaultError::InvalidAddress`] — executor is not a whitelisted signer.
     fn execute(env: Env, executor: Address, proposal_id: u64) -> Result<(), VaultError>;
 
+    /// Cancel a pending proposal before execution. Only its proposer may cancel it.
+    fn cancel_proposal(env: Env, proposer: Address, proposal_id: u64) -> Result<(), VaultError>;
+
     /// Returns the current status of a governance proposal as a human-readable
     /// string, or `None` if the proposal ID does not exist.
     ///
@@ -527,6 +660,18 @@ pub trait AuraVaultTrait {
     /// Query whether an address is whitelisted. Read-only, no auth required.
     fn is_whitelisted(env: Env, addr: Address) -> bool;
 
+    /// Add a depositor to the KYC allowlist. Admin-only.
+    fn add_to_allowlist(env: Env, admin: Address, address: Address) -> Result<(), VaultError>;
+
+    /// Remove a depositor from the KYC allowlist. Admin-only.
+    fn remove_from_allowlist(env: Env, admin: Address, address: Address) -> Result<(), VaultError>;
+
+    /// Query KYC allowlist membership. Read-only, no auth required.
+    fn is_allowlisted(env: Env, address: Address) -> bool;
+
+    /// Returns whether governance has enabled KYC allowlist enforcement.
+    fn allowlist_enabled(env: Env) -> bool;
+
     // -----------------------------------------------------------------------
     // Minimum deposit amount (Issue #355)
     // -----------------------------------------------------------------------
@@ -538,14 +683,28 @@ pub trait AuraVaultTrait {
     fn min_deposit(env: Env) -> i128;
 
     // -----------------------------------------------------------------------
+    // Referral tracking
+    // -----------------------------------------------------------------------
+
+    /// Return the number of deposits attributed to `referrer`.
+    ///
+    /// This count is incremented each time a depositor supplies
+    /// `Some(referrer)` as the referrer argument to [`deposit`].  It is
+    /// intended for off-chain reward calculation; no on-chain bonus is
+    /// distributed.
+    ///
+    /// Read-only; no authorization required.
+    fn get_referral_count(env: Env, referrer: Address) -> u32;
+
+    // -----------------------------------------------------------------------
     // Contract metadata (Issue #350)
     // -----------------------------------------------------------------------
 
     /// Returns the vault name. Read-only.
-    fn name(env: Env) -> Option<String>;
+    fn name(env: Env) -> String;
 
     /// Returns the vault share symbol. Read-only.
-    fn symbol(env: Env) -> Option<String>;
+    fn symbol(env: Env) -> String;
 
     /// Returns the contract version integer. Read-only.
     fn version(env: Env) -> u32;
@@ -600,6 +759,12 @@ pub trait AuraVaultTrait {
 
     /// Return the pending admin address, if any. Read-only.
     fn pending_admin(env: Env) -> Option<Address>;
+
+    /// Return the pending admin address, if any. Read-only alias.
+    fn get_pending_admin(env: Env) -> Option<Address>;
+
+    /// Cancel a pending admin transfer (current admin only).
+    fn cancel_admin_transfer(env: Env, current_admin: Address) -> Result<(), VaultError>;
 
     // -----------------------------------------------------------------------
     // Role-based access control (Issue #357)
@@ -721,5 +886,76 @@ pub trait AuraVaultTrait {
     ///
     /// Read-only; no authorization required.
     fn list_price_snapshots(env: Env, timestamps: Vec<u64>, from: u64, to: u64) -> Vec<(u64, i128)>;
+
+    // -----------------------------------------------------------------------
+    // Invariant health-check — Issue #931
+    // -----------------------------------------------------------------------
+
+    /// Validate all critical vault invariants and return a structured result.
+    ///
+    /// View-only — never modifies state.  Called automatically by the CI
+    /// upgrade test suite after every contract upgrade to verify vault health.
+    ///
+    /// # Invariants checked
+    ///
+    /// 1. `total_shares > 0` implies `total_assets > 0` (solvency).
+    /// 2. Admin's share balance ≤ `total_shares` (balance sample check).
+    /// 3. Vault is either fully initialised (admin + token set) or fully
+    ///    uninitialised — never in a partial state.
+    /// 4. Admin address is present once the vault is live.
+    /// 5. `perf_fee_bps <= 10_000` (fee cannot exceed 100 %).
+    ///
+    /// # Returns
+    ///
+    /// - [`InvariantCheckResult::AllPassed`] — all invariants pass.
+    /// - [`InvariantCheckResult::Failing`] — first failing invariant with a
+    ///   descriptive message.
+    ///
+    /// Read-only; no authorization required.  Never reverts.
+    fn check_invariants(env: Env) -> InvariantCheckResult;
+
+    // -----------------------------------------------------------------------
+    // Batch deposit (Issue #932)
+    // -----------------------------------------------------------------------
+
+    /// Deposit tokens on behalf of multiple recipients in a single transaction.
+    ///
+    /// The `caller` transfers the total sum of all `amounts` upfront and shares
+    /// are minted individually for each recipient using the current exchange
+    /// rate at the time of the call.
+    ///
+    /// Batch size is limited to **50 recipients** to bound gas usage.
+    ///
+    /// Emits one `deposit` event per recipient plus a single
+    /// `batch_deposit_completed` event containing the total deposited amount
+    /// and the number of recipients processed.
+    ///
+    /// # Parameters
+    ///
+    /// - `env` — Soroban execution environment.
+    /// - `caller` — Address transferring tokens for all recipients. Must
+    ///   authorise this call and hold sufficient token balance.
+    /// - `recipients` — List of `(recipient_address, amount)` pairs. Must be
+    ///   non-empty and contain ≤ 50 entries. Each amount must be > 0.
+    ///
+    /// # Returns
+    ///
+    /// A `Vec<i128>` of shares minted for each recipient, in the same order as
+    /// the `recipients` input.
+    ///
+    /// # Errors
+    ///
+    /// - [`VaultError::BatchEmpty`] — `recipients` list is empty.
+    /// - [`VaultError::BatchTooLarge`] — `recipients` list exceeds 50 entries.
+    /// - [`VaultError::ZeroAmount`] — any individual amount is ≤ 0, or a share
+    ///   formula rounds to zero.
+    /// - [`VaultError::NotInitialized`] — vault has not been initialised.
+    /// - [`VaultError::VaultPaused`] — vault is currently paused.
+    /// - [`VaultError::BalanceMismatch`] — flash-loan guard tripped.
+    /// - [`VaultError::MathOverflow`] — arithmetic overflow in total or share
+    ///   formula.
+    /// - [`VaultError::TvlCapExceeded`] — total deposit would push vault above
+    ///   the configured TVL cap.
+    fn batch_deposit(env: Env, caller: Address, recipients: Vec<(Address, i128)>) -> Result<Vec<i128>, VaultError>;
 }
 

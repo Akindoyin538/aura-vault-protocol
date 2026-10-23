@@ -70,6 +70,15 @@ const REDACTED_PATHS: string[] = [
   "*.seed",
   "secretKey",
   "*.secretKey",
+  // Issue #1269: broad patterns — catch any nested field whose name ends with
+  // a sensitive suffix so future config objects cannot inadvertently leak values.
+  "*.token",
+  "*.key",
+  "*.apiKey",
+  "*.api_key",
+  "*.url",        // covers databaseConfig.url, redisConfig.url, etc.
+  "*.password",
+  "*.secret",
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
