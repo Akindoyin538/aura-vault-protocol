@@ -36,7 +36,7 @@ webhookRouter.post("/", async (req: Request, res: Response): Promise<void> => {
     events?: VaultEventType[];
   };
   if (!url || !secret) {
-    res.status(400).json(errorResponse("MISSING_FIELDS", "url and secret are required"));
+    res.status(400).json({ error: "url and secret required" });
     return;
   }
   if (!isHttpUrl(url)) {

@@ -30,6 +30,7 @@ export {
   queryPaginationSchema,
   emailSendSchema,
   userPreferencesSchema,
+  sharePriceAlertSchema,
   // Types
   type AuthLoginInput as LoginInput,
   type AuthRefreshInput as RefreshInput,

@@ -1,8 +1,9 @@
-use soroban_sdk::{contracttype, Address, Env, Vec};
 use crate::errors::VaultError;
+use soroban_sdk::{contracttype, Address, Env, Vec};
 
 #[contracttype]
 pub enum DataKey {
+    Initialized,
     Admin,
     UnderlyingToken,
     TotalShares,
@@ -129,7 +130,13 @@ pub const PERSISTENT_BUMP_AMOUNT: u32 = DAY_IN_LEDGERS * 30;
 // ---------------------------------------------------------------------------
 
 pub fn is_initialized(env: &Env) -> bool {
-    env.storage().instance().has(&DataKey::UnderlyingToken)
+    env.storage().instance().has(&DataKey::Initialized)
+        || env.storage().instance().has(&DataKey::UnderlyingToken)
+        || env.storage().instance().has(&DataKey::Admin)
+}
+
+pub fn set_initialized(env: &Env) {
+    env.storage().instance().set(&DataKey::Initialized, &true);
 }
 
 pub fn get_admin(env: &Env) -> Option<Address> {
@@ -145,7 +152,9 @@ pub fn get_token(env: &Env) -> Option<Address> {
 }
 
 pub fn set_token(env: &Env, token: &Address) {
-    env.storage().instance().set(&DataKey::UnderlyingToken, token);
+    env.storage()
+        .instance()
+        .set(&DataKey::UnderlyingToken, token);
 }
 
 pub fn get_dex_router(env: &Env) -> Option<Address> {
@@ -161,7 +170,10 @@ pub fn set_dex_router(env: &Env, router: Option<&Address>) {
 }
 
 pub fn get_total_shares(env: &Env) -> i128 {
-    env.storage().instance().get(&DataKey::TotalShares).unwrap_or(0)
+    env.storage()
+        .instance()
+        .get(&DataKey::TotalShares)
+        .unwrap_or(0)
 }
 
 pub fn set_total_shares(env: &Env, val: i128) {
@@ -169,7 +181,10 @@ pub fn set_total_shares(env: &Env, val: i128) {
 }
 
 pub fn get_total_deposited(env: &Env) -> i128 {
-    env.storage().instance().get(&DataKey::TotalDeposited).unwrap_or(0)
+    env.storage()
+        .instance()
+        .get(&DataKey::TotalDeposited)
+        .unwrap_or(0)
 }
 
 pub fn set_total_deposited(env: &Env, val: i128) {
@@ -286,7 +301,10 @@ pub fn set_treasury(env: &Env, treasury: &Address) {
 }
 
 pub fn get_perf_fee_bps(env: &Env) -> u32 {
-    env.storage().instance().get(&DataKey::PerfFeeBps).unwrap_or(1000)
+    env.storage()
+        .instance()
+        .get(&DataKey::PerfFeeBps)
+        .unwrap_or(1000)
 }
 
 pub fn set_perf_fee_bps(env: &Env, bps: u32) {
@@ -294,7 +312,10 @@ pub fn set_perf_fee_bps(env: &Env, bps: u32) {
 }
 
 pub fn get_mgmt_fee_bps(env: &Env) -> u32 {
-    env.storage().instance().get(&DataKey::MgmtFeeBps).unwrap_or(0)
+    env.storage()
+        .instance()
+        .get(&DataKey::MgmtFeeBps)
+        .unwrap_or(0)
 }
 
 pub fn set_mgmt_fee_bps(env: &Env, bps: u32) {
@@ -302,19 +323,29 @@ pub fn set_mgmt_fee_bps(env: &Env, bps: u32) {
 }
 
 pub fn get_total_fee_collected(env: &Env) -> i128 {
-    env.storage().instance().get(&DataKey::TotalFeeCollected).unwrap_or(0)
+    env.storage()
+        .instance()
+        .get(&DataKey::TotalFeeCollected)
+        .unwrap_or(0)
 }
 
 pub fn set_total_fee_collected(env: &Env, val: i128) {
-    env.storage().instance().set(&DataKey::TotalFeeCollected, &val);
+    env.storage()
+        .instance()
+        .set(&DataKey::TotalFeeCollected, &val);
 }
 
 pub fn get_last_mgmt_fee_time(env: &Env) -> u64 {
-    env.storage().instance().get(&DataKey::LastMgmtFeeTime).unwrap_or(0)
+    env.storage()
+        .instance()
+        .get(&DataKey::LastMgmtFeeTime)
+        .unwrap_or(0)
 }
 
 pub fn set_last_mgmt_fee_time(env: &Env, time: u64) {
-    env.storage().instance().set(&DataKey::LastMgmtFeeTime, &time);
+    env.storage()
+        .instance()
+        .set(&DataKey::LastMgmtFeeTime, &time);
 }
 
 // ---------------------------------------------------------------------------
@@ -345,13 +376,11 @@ pub fn bump_instance(env: &Env) {
 }
 
 pub fn bump_persistent(env: &Env, addr: &Address) {
-    env.storage()
-        .persistent()
-        .extend_ttl(
-            &DataKey::Balance(addr.clone()),
-            PERSISTENT_LIFETIME_THRESHOLD,
-            PERSISTENT_BUMP_AMOUNT,
-        );
+    env.storage().persistent().extend_ttl(
+        &DataKey::Balance(addr.clone()),
+        PERSISTENT_LIFETIME_THRESHOLD,
+        PERSISTENT_BUMP_AMOUNT,
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -386,7 +415,10 @@ pub fn set_layout_version(env: &Env, v: u32) {
 // ---------------------------------------------------------------------------
 
 pub fn is_paused(env: &Env) -> bool {
-    env.storage().instance().get(&DataKey::Paused).unwrap_or(false)
+    env.storage()
+        .instance()
+        .get(&DataKey::Paused)
+        .unwrap_or(false)
 }
 
 pub fn set_paused(env: &Env, paused: bool) {
@@ -412,7 +444,10 @@ pub fn set_tvl_cap(env: &Env, cap: i128) {
 
 /// Timestamp (ledger unix seconds) of the last successful harvest. 0 = never.
 pub fn get_last_harvest_time(env: &Env) -> u64 {
-    env.storage().instance().get(&DataKey::LastHarvestTime).unwrap_or(0)
+    env.storage()
+        .instance()
+        .get(&DataKey::LastHarvestTime)
+        .unwrap_or(0)
 }
 
 pub fn set_last_harvest_time(env: &Env, ts: u64) {
@@ -421,11 +456,16 @@ pub fn set_last_harvest_time(env: &Env, ts: u64) {
 
 /// Minimum seconds that must elapse between harvests. 0 = no cooldown.
 pub fn get_harvest_cooldown_secs(env: &Env) -> u64 {
-    env.storage().instance().get(&DataKey::HarvestCooldownSecs).unwrap_or(0)
+    env.storage()
+        .instance()
+        .get(&DataKey::HarvestCooldownSecs)
+        .unwrap_or(0)
 }
 
 pub fn set_harvest_cooldown_secs(env: &Env, secs: u64) {
-    env.storage().instance().set(&DataKey::HarvestCooldownSecs, &secs);
+    env.storage()
+        .instance()
+        .set(&DataKey::HarvestCooldownSecs, &secs);
 }
 
 // ---------------------------------------------------------------------------
@@ -434,7 +474,10 @@ pub fn set_harvest_cooldown_secs(env: &Env, secs: u64) {
 
 /// Global cumulative yield-per-share (YPS), scaled by YIELD_PRECISION.
 pub fn get_cumulative_yps(env: &Env) -> i128 {
-    env.storage().instance().get(&DataKey::CumulativeYps).unwrap_or(0)
+    env.storage()
+        .instance()
+        .get(&DataKey::CumulativeYps)
+        .unwrap_or(0)
 }
 
 pub fn set_cumulative_yps(env: &Env, val: i128) {
@@ -471,11 +514,16 @@ pub fn set_user_pending_yield(env: &Env, addr: &Address, val: i128) {
 
 /// Global distribution epoch counter.
 pub fn get_distribution_epoch(env: &Env) -> u64 {
-    env.storage().instance().get(&DataKey::DistributionEpoch).unwrap_or(0)
+    env.storage()
+        .instance()
+        .get(&DataKey::DistributionEpoch)
+        .unwrap_or(0)
 }
 
 pub fn set_distribution_epoch(env: &Env, epoch: u64) {
-    env.storage().instance().set(&DataKey::DistributionEpoch, &epoch);
+    env.storage()
+        .instance()
+        .set(&DataKey::DistributionEpoch, &epoch);
 }
 
 /// TTL bump for per-user yield checkpoint and pending entries.
@@ -483,11 +531,19 @@ pub fn bump_user_yield_ttl(env: &Env, addr: &Address) {
     // Bump both entries if they exist; silently skip if not yet set.
     let ck = DataKey::UserCheckpoint(addr.clone());
     if env.storage().persistent().has(&ck) {
-        env.storage().persistent().extend_ttl(&ck, PERSISTENT_LIFETIME_THRESHOLD, PERSISTENT_BUMP_AMOUNT);
+        env.storage().persistent().extend_ttl(
+            &ck,
+            PERSISTENT_LIFETIME_THRESHOLD,
+            PERSISTENT_BUMP_AMOUNT,
+        );
     }
     let py = DataKey::UserPendingYield(addr.clone());
     if env.storage().persistent().has(&py) {
-        env.storage().persistent().extend_ttl(&py, PERSISTENT_LIFETIME_THRESHOLD, PERSISTENT_BUMP_AMOUNT);
+        env.storage().persistent().extend_ttl(
+            &py,
+            PERSISTENT_LIFETIME_THRESHOLD,
+            PERSISTENT_BUMP_AMOUNT,
+        );
     }
 }
 
@@ -498,45 +554,67 @@ pub fn bump_user_yield_ttl(env: &Env, addr: &Address) {
 /// Minimum underlying-token amount that routes a withdrawal through the queue.
 /// 0 means all withdrawals are instant (queue disabled).
 pub fn get_withdrawal_queue_threshold(env: &Env) -> i128 {
-    env.storage().instance().get(&DataKey::WithdrawalQueueThreshold).unwrap_or(0)
+    env.storage()
+        .instance()
+        .get(&DataKey::WithdrawalQueueThreshold)
+        .unwrap_or(0)
 }
 
 pub fn set_withdrawal_queue_threshold(env: &Env, threshold: i128) {
-    env.storage().instance().set(&DataKey::WithdrawalQueueThreshold, &threshold);
+    env.storage()
+        .instance()
+        .set(&DataKey::WithdrawalQueueThreshold, &threshold);
 }
 
 /// Seconds a queued withdrawal must wait before it can be claimed.
 /// Default 0 (instant once queued — admin sets unbonding period).
 pub fn get_withdrawal_unbonding_secs(env: &Env) -> u64 {
-    env.storage().instance().get(&DataKey::WithdrawalUnbondingSecs).unwrap_or(0)
+    env.storage()
+        .instance()
+        .get(&DataKey::WithdrawalUnbondingSecs)
+        .unwrap_or(0)
 }
 
 pub fn set_withdrawal_unbonding_secs(env: &Env, secs: u64) {
-    env.storage().instance().set(&DataKey::WithdrawalUnbondingSecs, &secs);
+    env.storage()
+        .instance()
+        .set(&DataKey::WithdrawalUnbondingSecs, &secs);
 }
 
 /// Withdrawal fee in basis points (0–500). Applied on claim.
 pub fn get_withdrawal_fee_bps(env: &Env) -> u32 {
-    env.storage().instance().get(&DataKey::WithdrawalFeeBps).unwrap_or(0)
+    env.storage()
+        .instance()
+        .get(&DataKey::WithdrawalFeeBps)
+        .unwrap_or(0)
 }
 
 pub fn set_withdrawal_fee_bps(env: &Env, bps: u32) {
-    env.storage().instance().set(&DataKey::WithdrawalFeeBps, &bps);
+    env.storage()
+        .instance()
+        .set(&DataKey::WithdrawalFeeBps, &bps);
 }
 
 /// Monotonically-increasing withdrawal queue ID.  The next entry will use
 /// this value, then it is incremented.
 pub fn get_withdrawal_next_id(env: &Env) -> u64 {
-    env.storage().instance().get(&DataKey::WithdrawalNextId).unwrap_or(1)
+    env.storage()
+        .instance()
+        .get(&DataKey::WithdrawalNextId)
+        .unwrap_or(1)
 }
 
 pub fn set_withdrawal_next_id(env: &Env, id: u64) {
-    env.storage().instance().set(&DataKey::WithdrawalNextId, &id);
+    env.storage()
+        .instance()
+        .set(&DataKey::WithdrawalNextId, &id);
 }
 
 /// Retrieve a withdrawal queue entry.
 pub fn get_withdrawal_entry(env: &Env, id: u64) -> Option<WithdrawalEntry> {
-    env.storage().persistent().get(&DataKey::WithdrawalEntry(id))
+    env.storage()
+        .persistent()
+        .get(&DataKey::WithdrawalEntry(id))
 }
 
 /// Store a withdrawal queue entry.
@@ -545,12 +623,18 @@ pub fn set_withdrawal_entry(env: &Env, id: u64, entry: &WithdrawalEntry) {
         .persistent()
         .set(&DataKey::WithdrawalEntry(id), entry);
     let key = DataKey::WithdrawalEntry(id);
-    env.storage().persistent().extend_ttl(&key, PERSISTENT_LIFETIME_THRESHOLD, PERSISTENT_BUMP_AMOUNT);
+    env.storage().persistent().extend_ttl(
+        &key,
+        PERSISTENT_LIFETIME_THRESHOLD,
+        PERSISTENT_BUMP_AMOUNT,
+    );
 }
 
 /// Remove a withdrawal queue entry (after claim).
 pub fn remove_withdrawal_entry(env: &Env, id: u64) {
-    env.storage().persistent().remove(&DataKey::WithdrawalEntry(id));
+    env.storage()
+        .persistent()
+        .remove(&DataKey::WithdrawalEntry(id));
 }
 
 // ---------------------------------------------------------------------------
@@ -593,11 +677,16 @@ pub struct WithdrawalEntry {
 // ---------------------------------------------------------------------------
 
 pub fn get_whitelist_enabled(env: &Env) -> bool {
-    env.storage().instance().get(&DataKey::WhitelistEnabled).unwrap_or(false)
+    env.storage()
+        .instance()
+        .get(&DataKey::WhitelistEnabled)
+        .unwrap_or(false)
 }
 
 pub fn set_whitelist_enabled(env: &Env, enabled: bool) {
-    env.storage().instance().set(&DataKey::WhitelistEnabled, &enabled);
+    env.storage()
+        .instance()
+        .set(&DataKey::WhitelistEnabled, &enabled);
 }
 
 pub fn is_whitelisted(env: &Env, addr: &Address) -> bool {
@@ -612,7 +701,11 @@ pub fn set_whitelisted(env: &Env, addr: &Address, whitelisted: bool) {
         .persistent()
         .set(&DataKey::Whitelist(addr.clone()), &whitelisted);
     let key = DataKey::Whitelist(addr.clone());
-    env.storage().persistent().extend_ttl(&key, PERSISTENT_LIFETIME_THRESHOLD, PERSISTENT_BUMP_AMOUNT);
+    env.storage().persistent().extend_ttl(
+        &key,
+        PERSISTENT_LIFETIME_THRESHOLD,
+        PERSISTENT_BUMP_AMOUNT,
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -620,7 +713,10 @@ pub fn set_whitelisted(env: &Env, addr: &Address, whitelisted: bool) {
 // ---------------------------------------------------------------------------
 
 pub fn get_min_deposit(env: &Env) -> i128 {
-    env.storage().instance().get(&DataKey::MinDeposit).unwrap_or(10_000)
+    env.storage()
+        .instance()
+        .get(&DataKey::MinDeposit)
+        .unwrap_or(10_000)
 }
 
 pub fn set_min_deposit(env: &Env, amount: i128) {
@@ -648,11 +744,16 @@ pub fn set_vault_symbol(env: &Env, symbol: &soroban_sdk::String) {
 }
 
 pub fn get_vault_version(env: &Env) -> u32 {
-    env.storage().instance().get(&DataKey::VaultVersion).unwrap_or(1u32)
+    env.storage()
+        .instance()
+        .get(&DataKey::VaultVersion)
+        .unwrap_or(1u32)
 }
 
 pub fn set_vault_version(env: &Env, version: u32) {
-    env.storage().instance().set(&DataKey::VaultVersion, &version);
+    env.storage()
+        .instance()
+        .set(&DataKey::VaultVersion, &version);
 }
 
 // ---------------------------------------------------------------------------
@@ -660,7 +761,10 @@ pub fn set_vault_version(env: &Env, version: u32) {
 // ---------------------------------------------------------------------------
 
 pub fn get_decimals(env: &Env) -> u32 {
-    env.storage().instance().get(&DataKey::Decimals).unwrap_or(7u32)
+    env.storage()
+        .instance()
+        .get(&DataKey::Decimals)
+        .unwrap_or(7u32)
 }
 
 pub fn set_decimals(env: &Env, decimals: u32) {
@@ -672,11 +776,16 @@ pub fn set_decimals(env: &Env, decimals: u32) {
 // ---------------------------------------------------------------------------
 
 pub fn is_reentrancy_locked(env: &Env) -> bool {
-    env.storage().instance().get(&DataKey::ReentrancyGuard).unwrap_or(false)
+    env.storage()
+        .instance()
+        .get(&DataKey::ReentrancyGuard)
+        .unwrap_or(false)
 }
 
 pub fn set_reentrancy_lock(env: &Env, locked: bool) {
-    env.storage().instance().set(&DataKey::ReentrancyGuard, &locked);
+    env.storage()
+        .instance()
+        .set(&DataKey::ReentrancyGuard, &locked);
 }
 
 pub fn enter_reentrancy_guard(env: &Env) -> Result<(), VaultError> {
@@ -747,9 +856,15 @@ pub fn get_role_mask(env: &Env, addr: &Address) -> u32 {
 }
 
 pub fn set_role_mask(env: &Env, addr: &Address, mask: u32) {
-    env.storage().persistent().set(&DataKey::Role(addr.clone()), &mask);
+    env.storage()
+        .persistent()
+        .set(&DataKey::Role(addr.clone()), &mask);
     let key = DataKey::Role(addr.clone());
-    env.storage().persistent().extend_ttl(&key, PERSISTENT_LIFETIME_THRESHOLD, PERSISTENT_BUMP_AMOUNT);
+    env.storage().persistent().extend_ttl(
+        &key,
+        PERSISTENT_LIFETIME_THRESHOLD,
+        PERSISTENT_BUMP_AMOUNT,
+    );
 }
 
 pub fn has_role(env: &Env, addr: &Address, role: u32) -> bool {
@@ -769,15 +884,22 @@ pub fn clear_pending_admin(env: &Env) {
 }
 
 pub fn get_pending_admin_expiry(env: &Env) -> u64 {
-    env.storage().instance().get(&DataKey::PendingAdminExpiry).unwrap_or(0)
+    env.storage()
+        .instance()
+        .get(&DataKey::PendingAdminExpiry)
+        .unwrap_or(0)
 }
 
 pub fn set_pending_admin_expiry(env: &Env, expiry: u64) {
-    env.storage().instance().set(&DataKey::PendingAdminExpiry, &expiry);
+    env.storage()
+        .instance()
+        .set(&DataKey::PendingAdminExpiry, &expiry);
 }
 
 pub fn clear_pending_admin_expiry(env: &Env) {
-    env.storage().instance().remove(&DataKey::PendingAdminExpiry);
+    env.storage()
+        .instance()
+        .remove(&DataKey::PendingAdminExpiry);
 }
 
 pub fn has_multisig_signed(env: &Env, op_id: u64, signer: &Address) -> bool {
@@ -788,10 +910,7 @@ pub fn has_multisig_signed(env: &Env, op_id: u64, signer: &Address) -> bool {
 }
 
 pub fn record_multisig_vote(env: &Env, op_id: u64, signer: &Address) {
-    env.storage().instance().set(
-        &DataKey::MultiSigVote(op_id, signer.clone()),
-        &true,
-    );
+    env.storage()
+        .instance()
+        .set(&DataKey::MultiSigVote(op_id, signer.clone()), &true);
 }
-
-

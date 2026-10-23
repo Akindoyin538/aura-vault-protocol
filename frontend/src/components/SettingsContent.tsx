@@ -171,6 +171,11 @@ export default function SettingsContent() {
           </div>
         </section>
 
+        {/* Share Price Alerts (Issue #908) */}
+        <section className="mb-8">
+          <SharePriceAlertPanel />
+        </section>
+
         {/* Security */}
         <section className="mb-8">
           <h2 className="text-lg font-medium mb-3">{t("settings.security.title")}</h2>
