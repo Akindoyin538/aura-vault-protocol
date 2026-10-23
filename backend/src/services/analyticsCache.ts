@@ -11,7 +11,7 @@ import {
   NS,
   type SortedCacheEntry,
 } from "../cache.js";
-import { getReadPool } from "../db.js";
+import { getReadPool, getWritePool } from "../db.js";
 import { logger } from "../logger.js";
 
 const LEADERBOARD_KEY = "current";
@@ -21,6 +21,13 @@ const ANALYTICS_TTL_SECONDS = 300;
 export interface LeaderboardEntry {
   userId: string;
   shareBalance: string;
+}
+
+export type LeaderboardPeriod = "all" | "30d" | "7d" | "24h";
+
+export interface RankedLeaderboardEntry extends LeaderboardEntry {
+  rank: number;
+  rankChange: number | null;
 }
 
 async function refreshLeaderboard(): Promise<LeaderboardEntry[]> {
@@ -39,6 +46,44 @@ async function refreshLeaderboard(): Promise<LeaderboardEntry[]> {
     userId: row.user_id,
     shareBalance: row.share_balance,
   }));
+
+  // Keep one baseline per hour for period-over-period rank movement. The
+  // primary key makes concurrent cache warmers safe, and old snapshots are
+  // pruned in the same statement to bound storage growth.
+  try {
+    await getWritePool().query(
+      `WITH snapshot_time AS (
+         SELECT date_trunc('hour', NOW()) AS at
+       ), inserted AS (
+         INSERT INTO leaderboard_rank_snapshots (snapshot_at, user_id, rank, share_balance)
+         SELECT snapshot_time.at, ranked.user_id, ranked.rank, ranked.share_balance
+           FROM snapshot_time
+           CROSS JOIN LATERAL (
+             SELECT user_id, share_balance, ROW_NUMBER() OVER (ORDER BY share_balance DESC, user_id)::integer AS rank
+               FROM (
+                 SELECT user_id, SUM(amount) AS share_balance
+                   FROM vault_positions
+                  WHERE deleted_at IS NULL
+                  GROUP BY user_id
+               ) balances
+              ORDER BY share_balance DESC, user_id
+              LIMIT 100
+           ) ranked
+          WHERE NOT EXISTS (
+            SELECT 1 FROM leaderboard_rank_snapshots existing
+             WHERE existing.snapshot_at = snapshot_time.at
+          )
+         ON CONFLICT (snapshot_at, user_id) DO NOTHING
+         RETURNING 1
+       )
+       DELETE FROM leaderboard_rank_snapshots
+        WHERE snapshot_at < NOW() - INTERVAL '31 days'`
+    );
+  } catch (err) {
+    // Historical rank tracking must not take down the public live leaderboard
+    // when a deployment has not yet applied the optional snapshot migration.
+    logger.warn({ err }, "Leaderboard rank snapshot could not be stored");
+  }
   const sorted: SortedCacheEntry[] = entries.map((entry) => ({
     member: JSON.stringify([entry.userId, entry.shareBalance]),
     score: Number(entry.shareBalance),
@@ -50,6 +95,38 @@ async function refreshLeaderboard(): Promise<LeaderboardEntry[]> {
     LEADERBOARD_TTL_SECONDS
   );
   return entries;
+}
+
+export async function getRankedLeaderboard(
+  period: LeaderboardPeriod
+): Promise<RankedLeaderboardEntry[]> {
+  const entries = await getCachedLeaderboard();
+  const current = entries.map((entry, index) => ({
+    ...entry,
+    rank: index + 1,
+    rankChange: null as number | null,
+  }));
+  if (period === "all" || current.length === 0) return current;
+
+  const hours = period === "24h" ? 24 : period === "7d" ? 24 * 7 : 24 * 30;
+  const { rows } = await getReadPool().query<{ user_id: string; rank: number }>(
+    `SELECT user_id::text AS user_id, rank
+       FROM leaderboard_rank_snapshots
+      WHERE snapshot_at = (
+        SELECT MAX(snapshot_at)
+          FROM leaderboard_rank_snapshots
+         WHERE snapshot_at <= NOW() - ($1::integer * INTERVAL '1 hour')
+      )`,
+    [hours]
+  );
+  const previousRanks = new Map(rows.map((row) => [row.user_id, row.rank]));
+  return current.map((entry) => {
+    const previousRank = previousRanks.get(entry.userId);
+    return {
+      ...entry,
+      rankChange: previousRank === undefined ? null : previousRank - entry.rank,
+    };
+  });
 }
 
 export async function getCachedLeaderboard(): Promise<LeaderboardEntry[]> {
