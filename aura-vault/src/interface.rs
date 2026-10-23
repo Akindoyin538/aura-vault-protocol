@@ -581,6 +581,18 @@ pub trait AuraVaultTrait {
     /// Query whether an address is whitelisted. Read-only, no auth required.
     fn is_whitelisted(env: Env, addr: Address) -> bool;
 
+    /// Add a depositor to the KYC allowlist. Admin-only.
+    fn add_to_allowlist(env: Env, admin: Address, address: Address) -> Result<(), VaultError>;
+
+    /// Remove a depositor from the KYC allowlist. Admin-only.
+    fn remove_from_allowlist(env: Env, admin: Address, address: Address) -> Result<(), VaultError>;
+
+    /// Query KYC allowlist membership. Read-only, no auth required.
+    fn is_allowlisted(env: Env, address: Address) -> bool;
+
+    /// Returns whether governance has enabled KYC allowlist enforcement.
+    fn allowlist_enabled(env: Env) -> bool;
+
     // -----------------------------------------------------------------------
     // Minimum deposit amount (Issue #355)
     // -----------------------------------------------------------------------

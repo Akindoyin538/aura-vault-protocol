@@ -709,6 +709,44 @@ pub fn set_whitelisted(env: &Env, addr: &Address, whitelisted: bool) {
 }
 
 // ---------------------------------------------------------------------------
+// KYC deposit allowlist (Issue #916)
+// ---------------------------------------------------------------------------
+
+pub fn is_allowlist_enabled(env: &Env) -> bool {
+    env.storage()
+        .instance()
+        .get(&DataKey::AllowlistEnabled)
+        .unwrap_or(false)
+}
+
+pub fn set_allowlist_enabled(env: &Env, enabled: bool) {
+    env.storage()
+        .instance()
+        .set(&DataKey::AllowlistEnabled, &enabled);
+}
+
+pub fn is_allowlisted(env: &Env, address: &Address) -> bool {
+    env.storage()
+        .persistent()
+        .get(&DataKey::AllowlistedAddress(address.clone()))
+        .unwrap_or(false)
+}
+
+pub fn set_allowlisted(env: &Env, address: &Address, allowed: bool) {
+    let key = DataKey::AllowlistedAddress(address.clone());
+    if allowed {
+        env.storage().persistent().set(&key, &true);
+        env.storage().persistent().extend_ttl(
+            &key,
+            PERSISTENT_LIFETIME_THRESHOLD,
+            PERSISTENT_BUMP_AMOUNT,
+        );
+    } else {
+        env.storage().persistent().remove(&key);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Minimum deposit helpers (Issue #355)
 // ---------------------------------------------------------------------------
 

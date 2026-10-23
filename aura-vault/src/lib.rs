@@ -475,6 +475,12 @@ impl AuraVault {
                 return Err(VaultError::VaultPaused);
             }
 
+            // KYC allowlist mode (Issue #916) is independent of the legacy
+            // whitelist mode and is enforced before any token call or state write.
+            if storage_is_allowlist_enabled(&env) && !storage_is_allowlisted(&env, &caller) {
+                return Err(VaultError::NotApproved);
+            }
+
             // Whitelist check — Issue #349
             if get_whitelist_enabled(&env) && !storage::is_whitelisted(&env, &caller) {
                 return Err(VaultError::NotWhitelisted);
@@ -2685,7 +2691,17 @@ impl AuraVault {
     /// - `proposal_id` — ID of the proposal to execute.
     pub fn execute(env: Env, executor: Address, proposal_id: u64) -> Result<(), VaultError> {
         with_reentrancy_guard(&env, || {
-            execute_proposal(&env, executor, proposal_id)?;
+            let proposal_type = execute_proposal(&env, executor, proposal_id)?;
+            if let ProposalType::UpdateParameter(name, value) = proposal_type {
+                if name == Symbol::new(&env, "set_allowlist_enabled") {
+                    let enabled = match value {
+                        0 => false,
+                        1 => true,
+                        _ => return Err(VaultError::InvalidAddress),
+                    };
+                    set_allowlist_enabled(&env, enabled);
+                }
+            }
             bump_instance(&env);
             Ok(())
         })
@@ -2867,6 +2883,65 @@ impl AuraVault {
     /// Query whether an address is whitelisted. Read-only, no auth required.
     pub fn is_whitelisted(env: Env, addr: Address) -> bool {
         storage::is_whitelisted(&env, &addr)
+    }
+
+    // -----------------------------------------------------------------------
+    // Governance-controlled KYC deposit allowlist (Issue #916)
+    // -----------------------------------------------------------------------
+
+    /// Add a depositor to the KYC allowlist. Admin-only; the mode itself is
+    /// enabled or disabled exclusively through a multisig governance proposal.
+    pub fn add_to_allowlist(env: Env, admin: Address, address: Address) -> Result<(), VaultError> {
+        with_reentrancy_guard(&env, || {
+            let stored_admin = get_admin(&env).ok_or(VaultError::NotInitialized)?;
+            if stored_admin != admin {
+                return Err(VaultError::UpgradeUnauthorized);
+            }
+            admin.require_auth();
+            if !storage_is_allowlisted(&env, &address) {
+                set_allowlisted(&env, &address, true);
+                env.events().publish(
+                    (Symbol::new(&env, "allowlist_address_added"), address),
+                    (),
+                );
+            }
+            bump_instance(&env);
+            Ok(())
+        })
+    }
+
+    /// Remove a depositor from the KYC allowlist. Admin-only.
+    pub fn remove_from_allowlist(
+        env: Env,
+        admin: Address,
+        address: Address,
+    ) -> Result<(), VaultError> {
+        with_reentrancy_guard(&env, || {
+            let stored_admin = get_admin(&env).ok_or(VaultError::NotInitialized)?;
+            if stored_admin != admin {
+                return Err(VaultError::UpgradeUnauthorized);
+            }
+            admin.require_auth();
+            if storage_is_allowlisted(&env, &address) {
+                set_allowlisted(&env, &address, false);
+                env.events().publish(
+                    (Symbol::new(&env, "allowlist_address_removed"), address),
+                    (),
+                );
+            }
+            bump_instance(&env);
+            Ok(())
+        })
+    }
+
+    /// Read-only KYC allowlist membership query.
+    pub fn is_allowlisted(env: Env, address: Address) -> bool {
+        storage_is_allowlisted(&env, &address)
+    }
+
+    /// Read-only view of the governance-controlled KYC allowlist mode.
+    pub fn allowlist_enabled(env: Env) -> bool {
+        storage_is_allowlist_enabled(&env)
     }
 
     // -----------------------------------------------------------------------

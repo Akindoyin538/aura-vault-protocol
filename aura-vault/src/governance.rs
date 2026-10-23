@@ -22,6 +22,29 @@ use crate::storage::{
     MULTISIG_EXPIRY_SECS,
 };
 
+/// Minimum number of distinct signers required to change the KYC allowlist mode.
+pub const ALLOWLIST_REQUIRED_SIGNATURES: u32 = 3;
+/// Minimum delay before a KYC allowlist mode change can execute.
+pub const ALLOWLIST_TIMELOCK_SECS: u64 = 24 * 60 * 60;
+
+fn is_allowlist_mode_update(env: &Env, op_type: &OpType) -> bool {
+    match op_type {
+        OpType::UpdateParameter(name, _) => {
+            *name == Symbol::new(env, "set_allowlist_enabled")
+        }
+        _ => false,
+    }
+}
+
+fn required_signatures(env: &Env, op_type: &OpType) -> u32 {
+    let threshold = get_multisig_threshold(env);
+    if is_allowlist_mode_update(env, op_type) {
+        threshold.max(ALLOWLIST_REQUIRED_SIGNATURES)
+    } else {
+        threshold
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Operation type — Soroban contracttype requires simple (tuple) variants
 // ---------------------------------------------------------------------------
@@ -171,7 +194,7 @@ pub fn propose_operation(
     let mut initial_signers = Vec::new(env);
     initial_signers.push_back(proposer.clone());
 
-    let threshold = get_multisig_threshold(env);
+    let threshold = required_signatures(env, &op_type);
     let status = if 1 >= threshold {
         OpStatus::Ready
     } else {
@@ -243,7 +266,7 @@ pub fn sign_operation(
     op.signers.push_back(signer.clone());
     record_multisig_vote(env, op_id, &signer);
 
-    let threshold = get_multisig_threshold(env);
+    let threshold = required_signatures(env, &op.op_type);
     if op.sig_count >= threshold {
         op.status = OpStatus::Ready;
     }
@@ -294,6 +317,18 @@ pub fn execute_multisig_op(
         OpStatus::Expired  => return Err(VaultError::OperationExpired),
         OpStatus::Pending  => return Err(VaultError::ThresholdNotMet),
         OpStatus::Ready    => {}
+    }
+
+    if is_allowlist_mode_update(env, &op.op_type) {
+        // The operation may have reached Ready under an earlier threshold.
+        // Re-evaluate the current governance threshold at execution time so a
+        // later threshold increase cannot be bypassed by a stale Ready status.
+        if op.sig_count < required_signatures(env, &op.op_type) {
+            return Err(VaultError::ThresholdNotMet);
+        }
+        if now < op.proposed_at + ALLOWLIST_TIMELOCK_SECS {
+            return Err(VaultError::TimelockNotExpired);
+        }
     }
 
     op.status = OpStatus::Executed;
@@ -474,9 +509,9 @@ pub fn execute_proposal(
     env: &Env,
     executor: Address,
     proposal_id: u64,
-) -> Result<(), VaultError> {
-    execute_multisig_op(env, executor, proposal_id)?;
-    Ok(())
+) -> Result<ProposalType, VaultError> {
+    let executed = execute_multisig_op(env, executor, proposal_id)?;
+    Ok(executed.op_type)
 }
 
 pub fn get_proposal_status(env: &Env, proposal_id: u64) -> Option<ProposalStatus> {

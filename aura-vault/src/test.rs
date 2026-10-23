@@ -1170,3 +1170,255 @@ mod reinit_guard {
         assert_eq!(VaultError::AlreadyInitialized as u32, 2);
     }
 }
+
+// ---------------------------------------------------------------------------
+// Deposit KYC allowlist (Issue #916)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_allowlist_defaults_disabled_and_existing_deposits_work() {
+    let (env, vault, admin, token) = setup();
+    let depositor = Address::generate(&env);
+    mint(&env, &token, &admin, &depositor, 10_000);
+
+    assert!(!vault.allowlist_enabled());
+    assert!(!vault.is_allowlisted(&depositor));
+    assert_eq!(vault.deposit(&depositor, &10_000), 10_000);
+}
+
+#[test]
+fn test_allowlist_admin_membership_auth_events_and_removal() {
+    let (env, vault, admin, _token) = setup();
+    let depositor = Address::generate(&env);
+
+    vault.add_to_allowlist(&admin, &depositor);
+    assert!(vault.is_allowlisted(&depositor));
+    assert_allowlist_event(&env, "allowlist_address_added", &depositor);
+
+    vault.remove_from_allowlist(&admin, &depositor);
+    assert!(!vault.is_allowlisted(&depositor));
+    assert_allowlist_event(&env, "allowlist_address_removed", &depositor);
+}
+
+#[test]
+fn test_allowlist_management_rejects_non_admin_and_requires_auth() {
+    let (env, vault, admin, _token) = setup();
+    let stranger = Address::generate(&env);
+    let depositor = Address::generate(&env);
+
+    assert_eq!(
+        vault.try_add_to_allowlist(&stranger, &depositor),
+        Err(Ok(VaultError::UpgradeUnauthorized))
+    );
+    assert_eq!(
+        vault.try_remove_from_allowlist(&stranger, &depositor),
+        Err(Ok(VaultError::UpgradeUnauthorized))
+    );
+
+    env.mock_auths(&[]);
+    assert!(vault.try_add_to_allowlist(&admin, &depositor).is_err());
+    assert!(vault.try_remove_from_allowlist(&admin, &depositor).is_err());
+}
+
+#[test]
+fn test_allowlist_governance_requires_three_signers_and_timelock() {
+    let (env, vault, signers, admin, token) = setup_multisig();
+    let approved = Address::generate(&env);
+    let rejected = Address::generate(&env);
+    mint(&env, &token, &admin, &approved, 10_000);
+    mint(&env, &token, &admin, &rejected, 10_000);
+    vault.add_to_allowlist(&admin, &approved);
+
+    let proposal_id = vault.propose_parameter_update(
+        &signers[0],
+        &Symbol::new(&env, "set_allowlist_enabled"),
+        &1_i128,
+    );
+    vault.vote(&signers[1], &proposal_id, &true);
+    assert_eq!(
+        vault.try_execute(&signers[0], &proposal_id),
+        Err(Ok(VaultError::ThresholdNotMet))
+    );
+    vault.vote(&signers[2], &proposal_id, &true);
+    assert_eq!(
+        vault.proposal_status(&proposal_id),
+        Some(soroban_sdk::String::from_str(&env, "Approved"))
+    );
+    assert_eq!(
+        vault.try_execute(&signers[0], &proposal_id),
+        Err(Ok(VaultError::TimelockNotExpired))
+    );
+    assert!(!vault.allowlist_enabled());
+
+    env.ledger()
+        .with_mut(|ledger| ledger.timestamp = 24 * 60 * 60);
+    vault.execute(&signers[0], &proposal_id);
+    assert!(vault.allowlist_enabled());
+
+    assert_eq!(
+        vault.try_deposit(&rejected, &10_000),
+        Err(Ok(VaultError::NotApproved))
+    );
+    assert_eq!(VaultError::NotApproved as u32, 14);
+    assert_eq!(vault.total_assets(), 0);
+    assert_eq!(vault.deposit(&approved, &10_000), 10_000);
+
+    vault.remove_from_allowlist(&admin, &approved);
+    assert!(!vault.is_allowlisted(&approved));
+    assert_eq!(
+        vault.try_deposit(&approved, &10_000),
+        Err(Ok(VaultError::NotApproved))
+    );
+}
+
+#[test]
+fn test_allowlist_mode_disable_requires_governance_and_timelock() {
+    let (env, vault, signers, _admin, _token) = setup_multisig();
+    let enable_id = vault.propose_parameter_update(
+        &signers[0],
+        &Symbol::new(&env, "set_allowlist_enabled"),
+        &1_i128,
+    );
+    vault.vote(&signers[1], &enable_id, &true);
+    vault.vote(&signers[2], &enable_id, &true);
+    env.ledger()
+        .with_mut(|ledger| ledger.timestamp = 24 * 60 * 60);
+    vault.execute(&signers[0], &enable_id);
+    assert!(vault.allowlist_enabled());
+
+    let disable_id = vault.propose_parameter_update(
+        &signers[0],
+        &Symbol::new(&env, "set_allowlist_enabled"),
+        &0_i128,
+    );
+    vault.vote(&signers[1], &disable_id, &true);
+    vault.vote(&signers[2], &disable_id, &true);
+    assert_eq!(
+        vault.try_execute(&signers[0], &disable_id),
+        Err(Ok(VaultError::TimelockNotExpired))
+    );
+    assert!(vault.allowlist_enabled());
+    env.ledger()
+        .with_mut(|ledger| ledger.timestamp = 2 * 24 * 60 * 60);
+    vault.execute(&signers[0], &disable_id);
+    assert!(!vault.allowlist_enabled());
+}
+
+#[test]
+fn test_allowlist_governance_rejects_non_boolean_and_rolls_back() {
+    let (env, vault, signers, _admin, _token) = setup_multisig();
+    let proposal_id = vault.propose_parameter_update(
+        &signers[0],
+        &Symbol::new(&env, "set_allowlist_enabled"),
+        &2_i128,
+    );
+    vault.vote(&signers[1], &proposal_id, &true);
+    vault.vote(&signers[2], &proposal_id, &true);
+    env.ledger()
+        .with_mut(|ledger| ledger.timestamp = 24 * 60 * 60);
+
+    assert_eq!(
+        vault.try_execute(&signers[0], &proposal_id),
+        Err(Ok(VaultError::InvalidAddress))
+    );
+    assert!(!vault.allowlist_enabled());
+    assert_eq!(
+        vault.proposal_status(&proposal_id),
+        Some(soroban_sdk::String::from_str(&env, "Approved"))
+    );
+}
+
+#[test]
+fn test_allowlist_execution_rechecks_threshold_after_ready() {
+    let (env, vault, signers, _admin, _token) = setup_multisig();
+    let proposal_id = vault.propose_parameter_update(
+        &signers[0],
+        &Symbol::new(&env, "set_allowlist_enabled"),
+        &1_i128,
+    );
+    vault.vote(&signers[1], &proposal_id, &true);
+    vault.vote(&signers[2], &proposal_id, &true);
+    assert_eq!(
+        vault.proposal_status(&proposal_id),
+        Some(soroban_sdk::String::from_str(&env, "Approved"))
+    );
+
+    // The allowlist operation was approved at the 3-signature minimum.
+    // Raise the current governance threshold after it has become Ready.
+    crate::storage::set_multisig_threshold(&env, 4);
+    env.ledger()
+        .with_mut(|ledger| ledger.timestamp = 24 * 60 * 60);
+
+    assert_eq!(
+        vault.try_execute(&signers[0], &proposal_id),
+        Err(Ok(VaultError::ThresholdNotMet))
+    );
+    assert!(!vault.allowlist_enabled());
+    assert_eq!(
+        vault.proposal_status(&proposal_id),
+        Some(soroban_sdk::String::from_str(&env, "Approved"))
+    );
+}
+
+#[test]
+fn test_allowlist_execution_succeeds_after_new_threshold_is_met() {
+    let (env, vault, signers, _admin, _token) = setup_multisig();
+    let proposal_id = vault.propose_parameter_update(
+        &signers[0],
+        &Symbol::new(&env, "set_allowlist_enabled"),
+        &1_i128,
+    );
+    vault.vote(&signers[1], &proposal_id, &true);
+    vault.vote(&signers[2], &proposal_id, &true);
+    crate::storage::set_multisig_threshold(&env, 4);
+    env.ledger()
+        .with_mut(|ledger| ledger.timestamp = 24 * 60 * 60);
+
+    assert_eq!(
+        vault.try_execute(&signers[0], &proposal_id),
+        Err(Ok(VaultError::ThresholdNotMet))
+    );
+    assert!(!vault.allowlist_enabled());
+
+    // A fourth distinct authorized signer meets the newly raised threshold.
+    vault.vote(&signers[3], &proposal_id, &true);
+    vault.execute(&signers[0], &proposal_id);
+
+    assert!(vault.allowlist_enabled());
+    assert_eq!(
+        vault.proposal_status(&proposal_id),
+        Some(soroban_sdk::String::from_str(&env, "Executed"))
+    );
+}
+
+#[test]
+fn test_allowlist_execution_requires_authenticated_executor() {
+    let (env, vault, signers, _admin, _token) = setup_multisig();
+    let proposal_id = vault.propose_parameter_update(
+        &signers[0],
+        &Symbol::new(&env, "set_allowlist_enabled"),
+        &1_i128,
+    );
+    vault.vote(&signers[1], &proposal_id, &true);
+    vault.vote(&signers[2], &proposal_id, &true);
+    env.ledger()
+        .with_mut(|ledger| ledger.timestamp = 24 * 60 * 60);
+
+    env.mock_auths(&[]);
+    assert!(vault.try_execute(&signers[0], &proposal_id).is_err());
+    assert!(!vault.allowlist_enabled());
+    assert_eq!(
+        vault.proposal_status(&proposal_id),
+        Some(soroban_sdk::String::from_str(&env, "Approved"))
+    );
+}
+
+fn assert_allowlist_event(env: &Env, event_name: &str, address: &Address) {
+    let expected_name = Symbol::new(env, event_name);
+    let found = env.events().all().iter().any(|(_, topics, _)| {
+        topics.len() == 2
+            && Symbol::try_from_val(env, &topics.get(0).unwrap()).unwrap() == expected_name
+            && Address::try_from_val(env, &topics.get(1).unwrap()).unwrap() == address.clone()
+    });
+    assert!(found, "expected {event_name} event for {address}");
+}
