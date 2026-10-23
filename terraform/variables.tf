@@ -64,6 +64,29 @@ variable "asg_desired_capacity" {
   default     = 2
 }
 
+variable "canary_enabled" {
+  description = "Provision the isolated canary backend ASG and target group attachment."
+  type        = bool
+  default     = false
+}
+
+variable "canary_ami_id" {
+  description = "Immutable AMI containing the release to canary. Required when canary_enabled is true."
+  type        = string
+  default     = ""
+}
+
+variable "canary_weight" {
+  description = "Percent of HTTPS listener traffic sent to the canary target group (0-100)."
+  type        = number
+  default     = 0
+
+  validation {
+    condition     = var.canary_weight >= 0 && var.canary_weight <= 100
+    error_message = "canary_weight must be between 0 and 100."
+  }
+}
+
 variable "db_instance_class" {
   description = "RDS instance class"
   type        = string

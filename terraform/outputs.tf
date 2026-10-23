@@ -23,6 +23,16 @@ output "alb_zone_id" {
   value       = aws_lb.main.zone_id
 }
 
+output "canary_target_group_arn" {
+  description = "Target group ARN for the separately versioned canary backend."
+  value       = aws_lb_target_group.backend_canary.arn
+}
+
+output "canary_error_rate_alarm_name" {
+  description = "CloudWatch alarm used by the canary promotion workflow."
+  value       = aws_cloudwatch_metric_alarm.canary_error_rate.alarm_name
+}
+
 output "cloudfront_distribution_id" {
   description = "ID of the CloudFront distribution"
   value       = var.enable_cloudfront ? aws_cloudfront_distribution.main[0].id : null
