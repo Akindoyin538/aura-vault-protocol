@@ -55,6 +55,8 @@ mod tvl_cap_test;
 #[cfg(test)]
 mod harvest_cooldown_test;
 #[cfg(test)]
+mod yield_smoothing_test;
+#[cfg(test)]
 mod pause_lifecycle_test;
 #[cfg(test)]
 mod circuit_breaker_test;
@@ -302,6 +304,9 @@ impl AuraVault {
         set_token(&env, &underlying_token);
         set_total_shares(&env, 0);
         set_total_deposited(&env, 0);
+        storage::set_yield_vesting_pending(&env, 0);
+        storage::set_yield_vesting_start(&env, env.ledger().sequence());
+        storage::set_yield_vesting_period(&env, storage::DEFAULT_YIELD_VESTING_PERIOD);
         storage::set_cumulative_yps(&env, 0);
         storage::set_distribution_epoch(&env, 0);
         storage::set_user_checkpoint(&env, &admin, 0);
@@ -417,14 +422,15 @@ impl AuraVault {
             let total_shares = get_total_shares(&env);
 
             // Compute shares to mint (checked arithmetic; overflow returns MathOverflow)
-            let new_shares: i128 = if total_shares == 0 || total_deposited == 0 {
+            let priced_assets = total_deposited.saturating_sub(storage::unvested_yield(&env));
+            let new_shares: i128 = if total_shares == 0 || priced_assets == 0 {
                 amount
             } else {
                 let numerator = amount
                     .checked_mul(total_shares)
                     .ok_or(VaultError::MathOverflow)?;
                 numerator
-                    .checked_div(total_deposited)
+                    .checked_div(priced_assets)
                     .ok_or(VaultError::MathOverflow)?
             };
 
@@ -561,8 +567,9 @@ impl AuraVault {
 
             let total_shares = get_total_shares(&env);
 
+            let priced_assets = total_deposited.saturating_sub(storage::unvested_yield(&env));
             let numerator = shares
-                .checked_mul(total_deposited)
+                .checked_mul(priced_assets)
                 .ok_or(VaultError::MathOverflow)?;
             let redeem_amount = numerator
                 .checked_div(total_shares)
@@ -972,6 +979,7 @@ impl AuraVault {
             }
 
             let total_deposited = get_total_deposited(&env);
+            let priced_assets = total_deposited.saturating_sub(storage::unvested_yield(&env));
 
             let token_addr = get_token(&env).ok_or(VaultError::NotInitialized)?;
             let token = token::Client::new(&env, &token_addr);
@@ -1020,7 +1028,7 @@ impl AuraVault {
             // L == 0 disables the check.
             // -----------------------------------------------------------------------
             let price_limit_bps = storage::get_price_movement_limit(&env);
-            if price_limit_bps > 0 && total_deposited > 0 {
+            if price_limit_bps > 0 && priced_assets > 0 {
                 let delta = new_total
                     .checked_sub(total_deposited)
                     .ok_or(VaultError::MathOverflow)?
@@ -1029,7 +1037,7 @@ impl AuraVault {
                 let lhs = delta
                     .checked_mul(10_000)
                     .ok_or(VaultError::MathOverflow)?;
-                let rhs = total_deposited
+                let rhs = priced_assets
                     .checked_mul(price_limit_bps as i128)
                     .ok_or(VaultError::MathOverflow)?;
                 if lhs > rhs {
@@ -1057,6 +1065,7 @@ impl AuraVault {
 
             // Effects: increase total deposited with net yield; accumulate fees
             set_total_deposited(&env, new_total);
+            storage::schedule_yield_vesting(&env, yield_after_fee)?;
             storage::set_total_fee_collected(&env, new_fees);
             // Record harvest timestamp for cooldown enforcement (Issue #471)
             set_last_harvest_time(&env, env.ledger().timestamp());
@@ -1186,6 +1195,7 @@ impl AuraVault {
 
             // Effects: credit net underlying value
             set_total_deposited(&env, new_total);
+            storage::schedule_yield_vesting(&env, net_underlying)?;
             let prev_fees = storage::get_total_fee_collected(&env);
             storage::set_total_fee_collected(
                 &env,
@@ -2090,7 +2100,37 @@ impl AuraVault {
     /// Read-only view; no authorisation required. Gas-efficient: reads a
     /// single instance-storage entry.
     pub fn total_assets(env: Env) -> i128 {
-        get_total_deposited(&env)
+        get_total_deposited(&env).saturating_sub(storage::unvested_yield(&env))
+    }
+
+    /// Set the linear yield vesting period in ledgers. Zero is rejected; the
+    /// default is seven days (120,960 ledgers).
+    pub fn set_yield_vesting_period(
+        env: Env,
+        admin: Address,
+        ledgers: u32,
+    ) -> Result<(), VaultError> {
+        with_reentrancy_guard(&env, || {
+            let stored_admin = get_admin(&env).ok_or(VaultError::NotInitialized)?;
+            if stored_admin != admin {
+                return Err(VaultError::UpgradeUnauthorized);
+            }
+            admin.require_auth();
+            if ledgers == 0 {
+                return Err(VaultError::ZeroAmount);
+            }
+            let pending = storage::unvested_yield(&env);
+            storage::set_yield_vesting_pending(&env, pending);
+            storage::set_yield_vesting_start(&env, env.ledger().sequence());
+            storage::set_yield_vesting_period(&env, ledgers);
+            bump_instance(&env);
+            Ok(())
+        })
+    }
+
+    /// Returns the configured linear yield vesting period in ledgers.
+    pub fn get_yield_vesting_period(env: Env) -> u32 {
+        storage::get_yield_vesting_period(&env)
     }
 
     // -----------------------------------------------------------------------
