@@ -103,6 +103,10 @@ import {
   getRedisCircuitBreakerStats,
 } from "./services/redisCircuitBreakerService.js";
 import { metricsRouter, metricsMiddleware } from "./metrics.js";
+// Issue #1272: response compression
+import { compressionMiddleware } from "./middleware/compressionMiddleware.js";
+// Issue #1269: safe startup log — import only non-sensitive config sections
+import { serverConfig, redisConfig, databaseConfig } from "./config/index.js";
 
 const app = express();
 
@@ -124,6 +128,8 @@ app.use(loggingMiddleware());
 app.use(metricsMiddleware());
 
 app.use(express.json({ limit: "1mb" }));
+// Issue #1272: compress responses before they leave the server
+app.use(compressionMiddleware);
 app.use(responseEnvelopeMiddleware);
 
 // Global IP rate limiter — health check and metrics excluded so load-balancer probes and scrapers are not throttled
@@ -323,7 +329,14 @@ const server = app.listen(PORT, () => {
     logger.warn({ err }, "[startup] BullMQ init failed — vault queue unavailable");
   }
 
-  logger.info({ port: PORT }, `Aura Vault backend running on port ${PORT}`);
+  // Issue #1269: emit a safe startup log — no secrets, passwords, or full connection URLs.
+  // Extract only the hostname portion from connection strings so credentials never appear in logs.
+  const redisHost = (() => { try { return new URL(redisConfig.url).hostname; } catch { return "unknown"; } })();
+  const dbHost   = (() => { try { return new URL(databaseConfig.url).hostname; } catch { return "unknown"; } })();
+  logger.info(
+    { port: PORT, nodeEnv: serverConfig.nodeEnv, redisHost, dbHost },
+    `Aura Vault backend running on port ${PORT}`,
+  );
 });
 
 async function shutdown(signal: string): Promise<void> {
