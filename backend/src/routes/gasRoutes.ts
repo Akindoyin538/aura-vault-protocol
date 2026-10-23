@@ -18,6 +18,36 @@ function parseGasLimit(value: string | undefined): bigint | undefined {
 
 export const gasRouter = Router();
 
+const usdPriceCache = new Map<string, { price: number; fetchedAt: number }>();
+const COINGECKO_IDS: Record<string, string> = { USDC: 'usd-coin', XLM: 'stellar' };
+
+gasRouter.get('/usd-price', async (req: Request, res: Response): Promise<void> => {
+  const asset = String(req.query.asset ?? 'USDC').toUpperCase();
+  const coinId = COINGECKO_IDS[asset];
+  if (!coinId) {
+    res.status(400).json({ success: false, error: { message: 'Unsupported asset. Use USDC or XLM.' } });
+    return;
+  }
+  const cached = usdPriceCache.get(asset);
+  if (cached && Date.now() - cached.fetchedAt < 30_000) {
+    res.set('Cache-Control', 'public, max-age=30').json({ success: true, data: { asset, priceUSD: cached.price, fetchedAt: new Date(cached.fetchedAt).toISOString() } });
+    return;
+  }
+  try {
+    const response = await fetch(`https://api.coingecko.com/api/v3/simple/price?ids=${coinId}&vs_currencies=usd`, { signal: AbortSignal.timeout(4_000) });
+    if (!response.ok) throw new Error(`Price provider returned HTTP ${response.status}`);
+    const body = await response.json() as Record<string, { usd?: unknown }>;
+    const price = Number(body[coinId]?.usd);
+    if (!Number.isFinite(price) || price <= 0) throw new Error('Price provider returned an invalid USD price');
+    const fetchedAt = Date.now();
+    usdPriceCache.set(asset, { price, fetchedAt });
+    res.set('Cache-Control', 'public, max-age=30').json({ success: true, data: { asset, priceUSD: price, fetchedAt: new Date(fetchedAt).toISOString() } });
+  } catch (error) {
+    logger.warn({ asset, error: error instanceof Error ? error.message : String(error) }, '[gas/usd-price] Price lookup failed');
+    res.status(503).json({ success: false, error: { message: 'USD price is temporarily unavailable.' } });
+  }
+});
+
 gasRouter.get('/prices', async (req: Request, res: Response): Promise<void> => {
   const chainId = parseChainId(req.query.chainId as string | undefined);
   const gasLimit = parseGasLimit(req.query.gasLimit as string | undefined);

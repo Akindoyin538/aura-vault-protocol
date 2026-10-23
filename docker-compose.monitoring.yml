@@ -85,6 +85,22 @@ services:
     networks:
       - monitoring
 
+  # OTLP trace storage for Grafana trace views and latency analysis.
+  tempo:
+    image: grafana/tempo:2.6.1
+    container_name: aura-tempo
+    restart: unless-stopped
+    command: ["-config.file=/etc/tempo/tempo.yml"]
+    volumes:
+      - ./monitoring/tempo/tempo.yml:/etc/tempo/tempo.yml:ro
+      - tempo_data:/var/tempo
+    ports:
+      - "3200:3200"
+      - "4319:4317"
+      - "4320:4318"
+    networks:
+      - monitoring
+
   # ── Alerting ────────────────────────────────────────────────────────
   alertmanager:
     image: prom/alertmanager:v0.27.0
@@ -101,7 +117,9 @@ volumes:
   prometheus_data:
   grafana_data:
   loki_data:
+  tempo_data:
 
 networks:
   monitoring:
+    name: aura-network
     driver: bridge

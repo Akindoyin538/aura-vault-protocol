@@ -63,6 +63,7 @@ resource "aws_security_group" "backend" {
   
   tags = {
     Name = "${var.project_name}-backend-sg-${var.environment}"
+    Component = "backend"
   }
   
   lifecycle {
@@ -92,6 +93,7 @@ resource "aws_security_group" "rds" {
   
   tags = {
     Name = "${var.project_name}-rds-sg-${var.environment}"
+    Component = "database"
   }
   
   lifecycle {
