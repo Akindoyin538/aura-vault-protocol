@@ -97,6 +97,10 @@ pub enum DataKey {
     MultiSigVote(u64, Address),
     /// Per-address role bitmask used by admin/keeper/guardian checks.
     Role(Address),
+    /// SEP-41 share allowance and its expiration ledger.
+    ShareAllowance(Address, Address),
+    /// Optional contract address implementing the configured DEX router API.
+    DexRouter,
     /// Pending admin nominated for a two-step transfer.
     PendingAdmin,
     /// Unix timestamp at which a pending admin transfer expires.
@@ -142,6 +146,18 @@ pub fn get_token(env: &Env) -> Option<Address> {
 
 pub fn set_token(env: &Env, token: &Address) {
     env.storage().instance().set(&DataKey::UnderlyingToken, token);
+}
+
+pub fn get_dex_router(env: &Env) -> Option<Address> {
+    env.storage().instance().get(&DataKey::DexRouter)
+}
+
+pub fn set_dex_router(env: &Env, router: Option<&Address>) {
+    if let Some(address) = router {
+        env.storage().instance().set(&DataKey::DexRouter, address);
+    } else {
+        env.storage().instance().remove(&DataKey::DexRouter);
+    }
 }
 
 pub fn get_total_shares(env: &Env) -> i128 {
@@ -223,6 +239,38 @@ pub fn set_balance(env: &Env, addr: &Address, val: i128) {
     env.storage()
         .persistent()
         .set(&DataKey::Balance(addr.clone()), &val);
+}
+
+pub fn get_share_allowance(env: &Env, owner: &Address, spender: &Address) -> i128 {
+    get_share_allowance_details(env, owner, spender).map(|(amount, _)| amount).unwrap_or(0)
+}
+
+pub fn get_share_allowance_details(
+    env: &Env,
+    owner: &Address,
+    spender: &Address,
+) -> Option<(i128, u32)> {
+    let key = DataKey::ShareAllowance(owner.clone(), spender.clone());
+    match env.storage().persistent().get::<_, (i128, u32)>(&key) {
+        value @ Some((_, expiration)) if env.ledger().sequence() <= expiration => value,
+        _ => None,
+    }
+}
+
+pub fn set_share_allowance(
+    env: &Env,
+    owner: &Address,
+    spender: &Address,
+    amount: i128,
+    expiration: u32,
+) {
+    let key = DataKey::ShareAllowance(owner.clone(), spender.clone());
+    env.storage().persistent().set(&key, &(amount, expiration));
+    env.storage().persistent().extend_ttl(
+        &key,
+        PERSISTENT_LIFETIME_THRESHOLD,
+        PERSISTENT_BUMP_AMOUNT,
+    );
 }
 
 // ---------------------------------------------------------------------------

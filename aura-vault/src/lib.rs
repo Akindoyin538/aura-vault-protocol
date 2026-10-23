@@ -76,6 +76,8 @@ mod lifecycle_test;
 mod cross_contract_safety_test;
 #[cfg(test)]
 mod reentrancy_test;
+#[cfg(test)]
+mod issue_1212_1214_1216_1217_test;
 
 use soroban_sdk::{contract, contractimpl, contractclient, token, Address, Env, Vec, Symbol};
 
@@ -94,6 +96,22 @@ pub trait OracleTrait {
     fn price(env: Env, token: Address) -> (i128, u64);
 }
 
+/// DEX router contract expected by `deposit_with_swap`.
+#[contractclient(name = "DexRouterClient")]
+pub trait DexRouterInterface {
+    /// Swap `amount_in` from `caller` and deliver at least `min_amount_out`
+    /// units of `output_token` to `recipient`; return the amount delivered.
+    fn swap_exact_tokens_for_tokens(
+        env: Env,
+        caller: Address,
+        recipient: Address,
+        input_token: Address,
+        output_token: Address,
+        amount_in: i128,
+        min_amount_out: i128,
+    ) -> i128;
+}
+
 use storage::{
     bump_instance, bump_persistent, get_admin, get_balance, get_layout_version, get_token,
     get_total_deposited, get_total_shares, get_version, is_paused as storage_is_paused, set_admin,
@@ -110,6 +128,7 @@ use storage::{
     get_withdrawal_next_id, set_withdrawal_next_id,
     get_withdrawal_entry, set_withdrawal_entry, remove_withdrawal_entry,
     get_whitelist_enabled, set_whitelist_enabled, is_whitelisted as storage_is_whitelisted, set_whitelisted,
+    get_dex_router,
     get_min_deposit, set_min_deposit,
     get_vault_name, set_vault_name, get_vault_symbol, set_vault_symbol, get_vault_version, set_vault_version,
     get_decimals, set_decimals,
@@ -117,8 +136,9 @@ use storage::{
 };
 use governance::{
     initialize_governance, create_proposal, vote_on_proposal, execute_proposal,
-    get_proposal_status, ProposalStatus, ProposalType,
+    get_proposal_status, get_proposal_view, get_proposal_views, ProposalStatus, ProposalType,
 };
+pub use governance::{ProposalView, ProposalViewStatus};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -157,6 +177,69 @@ fn with_reentrancy_guard<T, F: FnOnce() -> Result<T, VaultError>>(env: &Env, f: 
     let result = f();
     storage::exit_reentrancy_guard(env);
     result
+}
+
+fn transfer_shares(env: &Env, from: &Address, to: &Address, shares: i128) -> Result<(), VaultError> {
+    if shares <= 0 {
+        return Err(VaultError::ZeroAmount);
+    }
+    let from_balance = get_balance(env, from);
+    if from_balance < shares {
+        return Err(VaultError::InsufficientShares);
+    }
+    if from == to {
+        env.events().publish(
+            (Symbol::new(env, "transfer"), from.clone(), to.clone()),
+            shares,
+        );
+        return Ok(());
+    }
+    let to_balance = get_balance(env, to);
+    let next_to_balance = to_balance.checked_add(shares).ok_or(VaultError::MathOverflow)?;
+    let next_from_balance = from_balance.checked_sub(shares).ok_or(VaultError::MathOverflow)?;
+
+    // Settle the sender's share-time yield before moving ownership. This keeps
+    // already accrued yield with the sender and starts the recipient at the
+    // current global accumulator.
+    let global_yps = storage::get_cumulative_yps(env);
+    let delta_yps = global_yps
+        .checked_sub(storage::get_user_checkpoint(env, from))
+        .ok_or(VaultError::MathOverflow)?;
+    let sender_accrued = from_balance
+        .checked_mul(delta_yps)
+        .ok_or(VaultError::MathOverflow)?
+        .checked_div(YIELD_PRECISION)
+        .ok_or(VaultError::MathOverflow)?;
+    let sender_pending = storage::get_user_pending_yield(env, from)
+        .checked_add(sender_accrued)
+        .ok_or(VaultError::MathOverflow)?;
+    let receiver_delta = global_yps
+        .checked_sub(storage::get_user_checkpoint(env, to))
+        .ok_or(VaultError::MathOverflow)?;
+    let receiver_accrued = to_balance
+        .checked_mul(receiver_delta)
+        .ok_or(VaultError::MathOverflow)?
+        .checked_div(YIELD_PRECISION)
+        .ok_or(VaultError::MathOverflow)?;
+    let receiver_pending = storage::get_user_pending_yield(env, to)
+        .checked_add(receiver_accrued)
+        .ok_or(VaultError::MathOverflow)?;
+
+    set_balance(env, from, next_from_balance);
+    set_balance(env, to, next_to_balance);
+    storage::set_user_checkpoint(env, from, global_yps);
+    storage::set_user_pending_yield(env, from, sender_pending);
+    storage::set_user_checkpoint(env, to, global_yps);
+    storage::set_user_pending_yield(env, to, receiver_pending);
+    bump_user_yield(env, from);
+    bump_user_yield(env, to);
+    bump_persistent(env, from);
+    bump_persistent(env, to);
+    env.events().publish(
+        (Symbol::new(env, "transfer"), from.clone(), to.clone()),
+        shares,
+    );
+    Ok(())
 }
 
 /// Extend TTL of per-user yield accounting entries (checkpoint + pending).
@@ -479,6 +562,120 @@ impl AuraVault {
             bump_instance(&env);
 
             Ok(new_shares)
+        })
+    }
+
+    /// Swap another SEP-41 token through the configured router and deposit
+    /// the resulting underlying tokens in one atomic operation.
+    pub fn deposit_with_swap(
+        env: Env,
+        caller: Address,
+        input_token: Address,
+        input_amount: i128,
+        min_shares: i128,
+    ) -> Result<i128, VaultError> {
+        with_reentrancy_guard(&env, || {
+            caller.require_auth();
+            if input_amount <= 0 || min_shares <= 0 {
+                return Err(VaultError::ZeroAmount);
+            }
+            if get_admin(&env).is_none() {
+                return Err(VaultError::NotInitialized);
+            }
+            if storage_is_paused(&env) {
+                return Err(VaultError::VaultPaused);
+            }
+            if get_whitelist_enabled(&env) && !storage::is_whitelisted(&env, &caller) {
+                return Err(VaultError::NotWhitelisted);
+            }
+            let router_addr = get_dex_router(&env).ok_or(VaultError::DexNotConfigured)?;
+            let underlying_addr = get_token(&env).ok_or(VaultError::NotInitialized)?;
+            if input_token == underlying_addr {
+                return Err(VaultError::InvalidAddress);
+            }
+
+            let token = token::Client::new(&env, &underlying_addr);
+            let vault_addr = env.current_contract_address();
+            let balance_before = token.balance(&vault_addr);
+            let total_deposited = get_total_deposited(&env);
+            if balance_before != total_deposited {
+                return Err(VaultError::BalanceMismatch);
+            }
+
+            let total_shares = get_total_shares(&env);
+            let min_underlying = if total_shares == 0 || total_deposited == 0 {
+                min_shares
+            } else {
+                let numerator = min_shares
+                    .checked_mul(total_deposited)
+                    .ok_or(VaultError::MathOverflow)?;
+                numerator
+                    .checked_add(total_shares - 1)
+                    .ok_or(VaultError::MathOverflow)?
+                    .checked_div(total_shares)
+                    .ok_or(VaultError::MathOverflow)?
+            };
+            let router = DexRouterClient::new(&env, &router_addr);
+            let reported_out = router.swap_exact_tokens_for_tokens(
+                &caller,
+                &vault_addr,
+                &input_token,
+                &underlying_addr,
+                &input_amount,
+                &min_underlying,
+            );
+            let received = token.balance(&vault_addr)
+                .checked_sub(balance_before)
+                .ok_or(VaultError::MathOverflow)?;
+            if received <= 0 || received != reported_out || received < min_underlying {
+                return Err(VaultError::DexSlippageExceeded);
+            }
+
+            let min_deposit = get_min_deposit(&env);
+            if min_deposit > 0 && received < min_deposit {
+                return Err(VaultError::BelowMinDeposit);
+            }
+            let next_total_deposited = total_deposited
+                .checked_add(received)
+                .ok_or(VaultError::MathOverflow)?;
+            let tvl_cap = get_tvl_cap(&env);
+            if tvl_cap > 0 && next_total_deposited > tvl_cap {
+                return Err(VaultError::TvlCapExceeded);
+            }
+            let minted = if total_shares == 0 || total_deposited == 0 {
+                received
+            } else {
+                received.checked_mul(total_shares)
+                    .ok_or(VaultError::MathOverflow)?
+                    .checked_div(total_deposited)
+                    .ok_or(VaultError::MathOverflow)?
+            };
+            if minted <= 0 || minted < min_shares {
+                return Err(VaultError::DexSlippageExceeded);
+            }
+
+            let new_balance = get_balance(&env, &caller)
+                .checked_add(minted)
+                .ok_or(VaultError::MathOverflow)?;
+            let next_total_shares = total_shares
+                .checked_add(minted)
+                .ok_or(VaultError::MathOverflow)?;
+            set_balance(&env, &caller, new_balance);
+            storage::set_user_checkpoint(&env, &caller, storage::get_cumulative_yps(&env));
+            storage::set_user_pending_yield(&env, &caller, storage::get_user_pending_yield(&env, &caller));
+            set_total_shares(&env, next_total_shares);
+            set_total_deposited(&env, next_total_deposited);
+            let share_price = next_total_deposited
+                .checked_mul(10_000_000)
+                .and_then(|value| value.checked_div(next_total_shares))
+                .unwrap_or(0);
+            env.events().publish(
+                (Symbol::new(&env, "deposit"), caller.clone(), received),
+                (minted, next_total_shares, next_total_deposited, share_price, env.ledger().timestamp()),
+            );
+            bump_persistent(&env, &caller);
+            bump_instance(&env);
+            Ok(minted)
         })
     }
 
@@ -1852,29 +2049,27 @@ impl AuraVault {
     // Fee administration — admin-only
     // -----------------------------------------------------------------------
 
+    /// Configure or clear the optional DEX router used for swap deposits.
+    /// The router is trusted to execute swaps and must deliver output directly
+    /// to this vault; every swap is still checked against the observed token
+    /// balance delta and the caller's minimum share amount.
+    pub fn set_dex_router(env: Env, admin: Address, router: Option<Address>) -> Result<(), VaultError> {
+        with_reentrancy_guard(&env, || {
+            let stored_admin = get_admin(&env).ok_or(VaultError::NotInitialized)?;
+            if stored_admin != admin {
+                return Err(VaultError::UpgradeUnauthorized);
+            }
+            admin.require_auth();
+            storage::set_dex_router(&env, router.as_ref());
+            env.events().publish((Symbol::new(&env, "dex_router_updated"), admin), router);
+            bump_instance(&env);
+            Ok(())
+        })
+    }
+
     /// Set performance and management fee rates.
     ///
-    /// Admin-only. Fees are expressed in **basis points** where
-    /// `10_000 bps = 100%`.
-    ///
-    /// - `perf_fee_bps`: deducted from `yield_amount` on every [`harvest`]
-    ///   call. Default: `1_000` (10 %).
-    /// - `mgmt_fee_bps`: time-based management fee (reserved; not yet
-    ///   charged). Default: `0`.
-    ///
-    /// # Parameters
-    ///
-    /// - `env` — Soroban execution environment.
-    /// - `admin` — Must match the stored admin address and authorise this call.
-    /// - `perf_fee_bps` — Performance fee in basis points (0–10_000).
-    /// - `mgmt_fee_bps` — Management fee in basis points (0–10_000).
-    ///
-    /// # Errors
-    ///
-    /// - [`VaultError::NotInitialized`] — vault not yet initialised.
-    /// - [`VaultError::UpgradeUnauthorized`] — caller is not the admin.
-    ///
-    /// [`harvest`]: AuraVault::harvest
+    /// Admin-only. Fees are expressed in basis points where `10_000 bps = 100%`.
     pub fn set_fees(env: Env, admin: Address, perf_fee_bps: u32, mgmt_fee_bps: u32) -> Result<(), VaultError> {
         with_reentrancy_guard(&env, || {
             let stored_admin = get_admin(&env).ok_or(VaultError::NotInitialized)?;
@@ -2161,6 +2356,72 @@ impl AuraVault {
         get_balance(&env, &address)
     }
 
+    /// Transfer vault shares without changing the vault's underlying accounting.
+    pub fn transfer(env: Env, from: Address, to: Address, shares: i128) -> Result<(), VaultError> {
+        with_reentrancy_guard(&env, || {
+            from.require_auth();
+            if get_admin(&env).is_none() {
+                return Err(VaultError::NotInitialized);
+            }
+            transfer_shares(&env, &from, &to, shares)
+        })
+    }
+
+    /// Approve `spender` to transfer up to `shares` until `expiration_ledger`.
+    pub fn approve(
+        env: Env,
+        from: Address,
+        spender: Address,
+        shares: i128,
+        expiration_ledger: u32,
+    ) -> Result<(), VaultError> {
+        from.require_auth();
+        if get_admin(&env).is_none() {
+            return Err(VaultError::NotInitialized);
+        }
+        if shares < 0 || expiration_ledger < env.ledger().sequence() {
+            return Err(VaultError::InvalidAddress);
+        }
+        storage::set_share_allowance(&env, &from, &spender, shares, expiration_ledger);
+        env.events().publish(
+            (Symbol::new(&env, "approve"), from, spender),
+            (shares, expiration_ledger),
+        );
+        Ok(())
+    }
+
+    /// Return the currently usable share allowance, or zero after expiry.
+    pub fn allowance(env: Env, from: Address, spender: Address) -> i128 {
+        storage::get_share_allowance(&env, &from, &spender)
+    }
+
+    /// Transfer shares using an owner's unexpired allowance.
+    pub fn transfer_from(
+        env: Env,
+        spender: Address,
+        from: Address,
+        to: Address,
+        shares: i128,
+    ) -> Result<(), VaultError> {
+        with_reentrancy_guard(&env, || {
+            spender.require_auth();
+            if get_admin(&env).is_none() {
+                return Err(VaultError::NotInitialized);
+            }
+            if shares <= 0 {
+                return Err(VaultError::ZeroAmount);
+            }
+            let (available, expires_at) = storage::get_share_allowance_details(&env, &from, &spender)
+                .ok_or(VaultError::InsufficientShares)?;
+            if available < shares {
+                return Err(VaultError::InsufficientShares);
+            }
+            let remaining = available.checked_sub(shares).ok_or(VaultError::MathOverflow)?;
+            storage::set_share_allowance(&env, &from, &spender, remaining, expires_at);
+            transfer_shares(&env, &from, &to, shares)
+        })
+    }
+
     // -----------------------------------------------------------------------
     // Upgrade
     // -----------------------------------------------------------------------
@@ -2330,6 +2591,20 @@ impl AuraVault {
         })
     }
 
+    /// Return all governance proposals that have not expired.
+    ///
+    /// This read-only view is intended for governance dashboards. Each item
+    /// includes its action parameters, signer count, threshold, execution
+    /// status, and the earliest execution timestamp when available.
+    pub fn get_proposals(env: Env) -> soroban_sdk::Vec<ProposalView> {
+        get_proposal_views(&env)
+    }
+
+    /// Return one governance proposal, or `None` when the ID is unknown.
+    pub fn get_proposal(env: Env, id: u64) -> Option<ProposalView> {
+        get_proposal_view(&env, id)
+    }
+
     // -----------------------------------------------------------------------
     // get_vault_error_message — ABI-exposed error string lookup (Issue #370)
     // -----------------------------------------------------------------------
@@ -2346,7 +2621,7 @@ impl AuraVault {
     ///
     /// # Parameters
     ///
-    /// - `code` — Numeric discriminant (1–24) of a [`VaultError`] variant.
+    /// - `code` — Numeric discriminant of a [`VaultError`] variant.
     ///
     /// # Returns
     ///
@@ -2383,6 +2658,19 @@ impl AuraVault {
             28 => Some(VaultError::NotWhitelisted.message()),
             29 => Some(VaultError::BelowMinDeposit.message()),
             30 => Some(VaultError::Reentrancy.message()),
+            31 => Some(VaultError::NoPendingAdmin.message()),
+            32 => Some(VaultError::PendingAdminExpired.message()),
+            33 => Some(VaultError::Unauthorized.message()),
+            34 => Some(VaultError::CircuitBreakerTripped.message()),
+            35 => Some(VaultError::NotASigner.message()),
+            36 => Some(VaultError::OperationNotFound.message()),
+            37 => Some(VaultError::OperationAlreadyExecuted.message()),
+            38 => Some(VaultError::OperationExpired.message()),
+            39 => Some(VaultError::OperationAlreadySigned.message()),
+            40 => Some(VaultError::ThresholdNotMet.message()),
+            41 => Some(VaultError::InvalidThreshold.message()),
+            42 => Some(VaultError::DexSlippageExceeded.message()),
+            43 => Some(VaultError::DexNotConfigured.message()),
             _  => None,
         };
         msg.map(|s| soroban_sdk::String::from_str(&env, s))
@@ -2514,6 +2802,20 @@ impl AuraVault {
     /// Returns the contract version integer. Read-only, no auth required.
     pub fn version(env: Env) -> u32 {
         get_vault_version(&env)
+    }
+
+    /// Return the layout version stored by the deployed instance.
+    pub fn storage_layout_version(env: Env) -> u32 {
+        get_layout_version(&env)
+    }
+
+    /// Validate that the deployed instance matches this Wasm's expected layout.
+    pub fn validate_storage_layout_version(env: Env) -> Result<(), VaultError> {
+        if get_layout_version(&env) == CURRENT_LAYOUT_VERSION {
+            Ok(())
+        } else {
+            Err(VaultError::StorageLayoutMismatch)
+        }
     }
 
     /// Returns the number of decimal places used by vault shares (e.g. 7 for Stellar standard).
