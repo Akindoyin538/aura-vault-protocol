@@ -68,6 +68,10 @@ import { userExportRouter } from "./routes/userExportRoutes.js";
 import { indexerRouter } from "./routes/indexerRoutes.js";
 import { portfolioHistoryRouter } from "./routes/portfolioHistoryRoutes.js";
 import { swaggerRouter } from "./routes/swaggerRoutes.js";
+// Issue #1268: Governance proposals API
+import { governanceRouter } from "./routes/governanceRoutes.js";
+// Issue #1271: SSE vault events endpoint
+import { vaultEventsRouter } from "./routes/vaultEventsRoutes.js";
 // Issue #263: Admin panel — router + middleware
 import { adminRouter } from "./routes/adminRoutes.js";
 import { authenticateAdmin } from "./middleware/adminMiddleware.js";
@@ -223,6 +227,12 @@ app.use("/api/referrals", referralRouter);
 
 // Issue #868: OpenAPI 3.1 Spec and Swagger UI at /api/docs
 app.use("/api/docs", swaggerRouter);
+
+// Issue #1268: Governance proposals API
+app.use("/api/v1/governance", governanceRouter);
+
+// Issue #1271: SSE vault events endpoint
+app.use("/api/v1/vault", vaultEventsRouter);
 
 // ── Issue #285: Contract event stream (SSE) ───────────────────────────────────
 app.use("/api/v1/events", eventsRouter);
