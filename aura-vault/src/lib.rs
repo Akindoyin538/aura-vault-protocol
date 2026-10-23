@@ -451,6 +451,8 @@ impl AuraVault {
     /// - `caller` — Address depositing tokens; must authorise this call.
     /// - `amount` — Number of underlying tokens to deposit, in the token's
     ///   smallest unit (e.g. stroops for a 7-decimal Stellar token). Must be > 0.
+    /// - `nonce` — Per-address replay-protection counter.  Must equal the value
+    ///   returned by `get_nonce(caller)`.  Incremented atomically on success.
     ///
     /// # Returns
     ///
@@ -463,7 +465,8 @@ impl AuraVault {
     /// - [`VaultError::VaultPaused`] — vault is paused.
     /// - [`VaultError::BalanceMismatch`] — flash-loan guard tripped.
     /// - [`VaultError::MathOverflow`] — arithmetic overflow in share formula.
-    pub fn deposit(env: Env, caller: Address, amount: i128) -> Result<i128, VaultError> {
+    /// - [`VaultError::InvalidNonce`] — supplied nonce does not match stored nonce.
+    pub fn deposit(env: Env, caller: Address, amount: i128, nonce: u64) -> Result<i128, VaultError> {
         with_reentrancy_guard(&env, || {
             caller.require_auth();
 
@@ -2898,6 +2901,25 @@ impl AuraVault {
     }
 
     // -----------------------------------------------------------------------
+    // get_nonce  (read-only)
+    // -----------------------------------------------------------------------
+    /// Returns the current deposit nonce for `address`.
+    ///
+    /// The caller must pass this value as the `nonce` parameter of the next
+    /// `deposit` call to prove freshness.  The nonce starts at `0` for every
+    /// new address and is incremented atomically on each successful deposit.
+    ///
+    /// Read-only view; no authorisation required.
+    ///
+    /// # Parameters
+    ///
+    /// - `env` — Soroban execution environment.
+    /// - `address` — The Stellar account address to query.
+    pub fn get_nonce(env: Env, address: Address) -> u64 {
+        storage::get_nonce(&env, &address)
+    }
+
+    // -----------------------------------------------------------------------
     // Upgrade
     // -----------------------------------------------------------------------
     /// Upgrade the contract's Wasm binary to a new version.
@@ -3131,7 +3153,7 @@ impl AuraVault {
             16 => Some(VaultError::TvlCapExceeded.message()),
             17 => Some(VaultError::YieldTooSmall.message()),
             18 => Some(VaultError::DistributionAccuracyError.message()),
-            19 => Some(VaultError::HarvestCooldown.message()),
+            19 => Some(VaultError::InvalidNonce.message()),
             20 => Some(VaultError::WithdrawalQueued.message()),
             21 => Some(VaultError::QueueEntryNotFound.message()),
             22 => Some(VaultError::QueueUnbondingPending.message()),
