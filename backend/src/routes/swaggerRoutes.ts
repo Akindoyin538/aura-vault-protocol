@@ -63,6 +63,14 @@ const openApiSpec = {
       name: "Health",
       description: "Service health checks and status monitoring",
     },
+    {
+      name: "Governance",
+      description: "Multi-sig governance proposals and voting",
+    },
+    {
+      name: "VaultEvents",
+      description: "Real-time vault event stream (Server-Sent Events)",
+    },
   ],
   paths: {
     "/api/auth/login": {
@@ -418,6 +426,351 @@ const openApiSpec = {
         },
       },
     },
+    // ── Issue #1268: Governance Proposals ─────────────────────────────────────
+    "/api/v1/governance/proposals": {
+      get: {
+        tags: ["Governance"],
+        summary: "List governance proposals",
+        description: "Returns paginated non-expired governance proposals. Pass `includeExpired=true` to include all.",
+        operationId: "listGovernanceProposals",
+        parameters: [
+          {
+            name: "page",
+            in: "query",
+            schema: { type: "integer", minimum: 1, default: 1 },
+            description: "Page number (1-based)",
+          },
+          {
+            name: "pageSize",
+            in: "query",
+            schema: { type: "integer", minimum: 1, maximum: 100, default: 20 },
+            description: "Items per page",
+          },
+          {
+            name: "status",
+            in: "query",
+            schema: {
+              type: "string",
+              enum: ["active", "approved", "rejected", "executed", "expired", "cancelled"],
+            },
+            description: "Filter by proposal lifecycle status",
+          },
+          {
+            name: "includeExpired",
+            in: "query",
+            schema: { type: "boolean", default: false },
+            description: "Include expired proposals",
+          },
+        ],
+        responses: {
+          "200": {
+            description: "Paginated list of governance proposals",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    success: { type: "boolean", example: true },
+                    data: {
+                      type: "array",
+                      items: { $ref: "#/components/schemas/GovernanceProposal" },
+                    },
+                    pagination: { $ref: "#/components/schemas/Pagination" },
+                  },
+                },
+              },
+            },
+          },
+          "400": { $ref: "#/components/responses/ValidationError" },
+          "500": { $ref: "#/components/responses/InternalError" },
+        },
+      },
+    },
+    "/api/v1/governance/proposals/{id}": {
+      get: {
+        tags: ["Governance"],
+        summary: "Get governance proposal by ID",
+        description: "Returns a single proposal with its full vote list.",
+        operationId: "getGovernanceProposal",
+        parameters: [
+          {
+            name: "id",
+            in: "path",
+            required: true,
+            schema: { type: "string", format: "uuid" },
+            description: "Proposal UUID",
+          },
+        ],
+        responses: {
+          "200": {
+            description: "Governance proposal with votes",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    success: { type: "boolean", example: true },
+                    data: { $ref: "#/components/schemas/GovernanceProposalWithVotes" },
+                  },
+                },
+              },
+            },
+          },
+          "400": { $ref: "#/components/responses/ValidationError" },
+          "404": { $ref: "#/components/responses/NotFound" },
+          "500": { $ref: "#/components/responses/InternalError" },
+        },
+      },
+    },
+    "/api/v1/governance/proposals/{id}/vote": {
+      post: {
+        tags: ["Governance"],
+        summary: "Record off-chain vote intent",
+        description:
+          "Records an off-chain vote intent for an authenticated wallet. " +
+          "After submission, the caller is guided to sign and broadcast the on-chain governance transaction. " +
+          "Each wallet may cast only one vote per proposal (mirrors AlreadyVoted error 15 on-chain).",
+        operationId: "voteOnGovernanceProposal",
+        security: [{ BearerAuth: [] }],
+        parameters: [
+          {
+            name: "id",
+            in: "path",
+            required: true,
+            schema: { type: "string", format: "uuid" },
+            description: "Proposal UUID",
+          },
+        ],
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                required: ["support"],
+                properties: {
+                  support: {
+                    type: "boolean",
+                    description: "true = approve, false = reject",
+                  },
+                  comment: {
+                    type: "string",
+                    maxLength: 500,
+                    description: "Optional rationale (max 500 chars)",
+                  },
+                },
+              },
+              examples: {
+                approve: { value: { support: true, comment: "Upgrade looks safe." } },
+                reject: { value: { support: false, comment: "Need more review." } },
+              },
+            },
+          },
+        },
+        responses: {
+          "201": {
+            description: "Vote intent recorded; next step instructions included",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    success: { type: "boolean", example: true },
+                    data: {
+                      type: "object",
+                      properties: {
+                        voteIntent: { $ref: "#/components/schemas/VoteIntent" },
+                        nextStep: {
+                          type: "object",
+                          properties: {
+                            action: { type: "string", example: "sign_on_chain" },
+                            message: { type: "string" },
+                            proposalId: { type: "string", format: "uuid" },
+                            support: { type: "boolean" },
+                          },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+          "400": { $ref: "#/components/responses/ValidationError" },
+          "401": { $ref: "#/components/responses/Unauthorized" },
+          "404": { $ref: "#/components/responses/NotFound" },
+          "409": {
+            description: "Already voted — wallet has already cast a vote on this proposal",
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/ValidationError" },
+                example: {
+                  success: false,
+                  error: { code: "ALREADY_VOTED", message: "You have already cast a vote on this proposal" },
+                },
+              },
+            },
+          },
+          "422": {
+            description: "Proposal is not active or has expired",
+          },
+          "500": { $ref: "#/components/responses/InternalError" },
+        },
+      },
+    },
+    "/api/v1/governance/proposals/{id}/status": {
+      get: {
+        tags: ["Governance"],
+        summary: "Real-time on-chain proposal status",
+        description:
+          "Queries the Soroban contract directly (not the database) for the proposal's current state. " +
+          "Returns the live vote count, execution eligibility, and on-chain status.",
+        operationId: "getGovernanceProposalOnChainStatus",
+        parameters: [
+          {
+            name: "id",
+            in: "path",
+            required: true,
+            schema: { type: "string", format: "uuid" },
+            description: "Proposal UUID",
+          },
+        ],
+        responses: {
+          "200": {
+            description: "On-chain proposal status",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    success: { type: "boolean", example: true },
+                    data: {
+                      type: "object",
+                      properties: {
+                        found: { type: "boolean" },
+                        status: { type: "string" },
+                        votes_for: { type: "integer" },
+                        votes_against: { type: "integer" },
+                        executable_after: { type: "string", format: "date-time", nullable: true },
+                        executed: { type: "boolean" },
+                        source: { type: "string", enum: ["contract", "unavailable"] },
+                        queried_at: { type: "string", format: "date-time" },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+          "404": { $ref: "#/components/responses/NotFound" },
+          "500": { $ref: "#/components/responses/InternalError" },
+        },
+      },
+    },
+    // ── Issue #1271: SSE Vault Events ─────────────────────────────────────────
+    "/api/v1/vault/events": {
+      get: {
+        tags: ["VaultEvents"],
+        summary: "Subscribe to live vault event stream (SSE)",
+        description:
+          "Opens a Server-Sent Events connection that pushes vault events " +
+          "(deposit, withdraw, harvest) in real time.\n\n" +
+          "**Heartbeat:** a `: ping` comment is sent every 30 s.\n\n" +
+          "**Reconnect:** send the `Last-Event-ID` header to replay up to 100 missed events.\n\n" +
+          "**Connection limit:** 429 when the server has reached `MAX_SSE_CONNECTIONS` (default 1000).",
+        operationId: "vaultEventStream",
+        parameters: [
+          {
+            name: "Last-Event-ID",
+            in: "header",
+            required: false,
+            schema: { type: "string" },
+            description: "ID of the last event received; triggers missed-event replay on reconnect",
+          },
+        ],
+        responses: {
+          "200": {
+            description: "SSE stream — text/event-stream",
+            headers: {
+              "Content-Type": {
+                schema: { type: "string", example: "text/event-stream; charset=utf-8" },
+              },
+              "Cache-Control": {
+                schema: { type: "string", example: "no-cache, no-transform" },
+              },
+              Connection: {
+                schema: { type: "string", example: "keep-alive" },
+              },
+            },
+            content: {
+              "text/event-stream": {
+                schema: {
+                  type: "string",
+                  description:
+                    "SSE stream.\n\nExample frames:\n\n" +
+                    "event: connected\ndata: {\"clientId\":\"ve-1\",...}\n\n" +
+                    "event: vault_update\nid: 12345:0:0:0\ndata: {\"type\":\"harvest\",\"amount\":\"50000\",\"newTotalAssets\":\"1050000\",\"timestamp\":\"2026-10-20T21:00:00Z\"}\n\n" +
+                    ": ping\n\n",
+                },
+              },
+            },
+          },
+          "429": {
+            description: "Connection limit reached",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    success: { type: "boolean", example: false },
+                    error: {
+                      type: "object",
+                      properties: {
+                        code: { type: "string", example: "SSE_CAPACITY_EXCEEDED" },
+                        message: { type: "string" },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+    "/api/v1/vault/events/status": {
+      get: {
+        tags: ["VaultEvents"],
+        summary: "SSE connection status",
+        description: "Returns the current connected client count and server configuration.",
+        operationId: "vaultEventStreamStatus",
+        responses: {
+          "200": {
+            description: "SSE status",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    success: { type: "boolean", example: true },
+                    data: {
+                      type: "object",
+                      properties: {
+                        connectedClients: { type: "integer" },
+                        maxConnections: { type: "integer" },
+                        replayLimit: { type: "integer", example: 100 },
+                        heartbeatIntervalMs: { type: "integer", example: 30000 },
+                        timestamp: { type: "string", format: "date-time" },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
   },
   components: {
     securitySchemes: {
@@ -498,6 +851,145 @@ const openApiSpec = {
             properties: {
               code: { type: "string", example: "SERVICE_UNAVAILABLE" },
               message: { type: "string", description: "Degraded mode message" },
+            },
+          },
+        },
+      },
+      // ── Issue #1268: Governance schemas ──────────────────────────────────────
+      GovernanceProposal: {
+        type: "object",
+        properties: {
+          id: { type: "string", format: "uuid" },
+          contract_proposal_id: { type: "integer", nullable: true },
+          proposer_address: { type: "string", description: "Stellar address" },
+          title: { type: "string", maxLength: 200 },
+          description: { type: "string" },
+          action_type: {
+            type: "string",
+            enum: ["upgrade", "parameter_change", "pause", "unpause", "emergency"],
+          },
+          payload: { type: "object" },
+          status: {
+            type: "string",
+            enum: ["active", "approved", "rejected", "executed", "expired", "cancelled"],
+          },
+          votes_for: { type: "integer" },
+          votes_against: { type: "integer" },
+          threshold: { type: "integer" },
+          executable_after: { type: "string", format: "date-time", nullable: true },
+          expires_at: { type: "string", format: "date-time" },
+          executed_at: { type: "string", format: "date-time", nullable: true },
+          execution_tx_hash: { type: "string", nullable: true },
+          created_at: { type: "string", format: "date-time" },
+          updated_at: { type: "string", format: "date-time" },
+        },
+        required: ["id", "proposer_address", "title", "action_type", "status", "votes_for", "votes_against", "threshold", "expires_at"],
+      },
+      VoteIntent: {
+        type: "object",
+        properties: {
+          id: { type: "string", format: "uuid" },
+          proposal_id: { type: "string", format: "uuid" },
+          voter_address: { type: "string" },
+          support: { type: "boolean" },
+          comment: { type: "string", nullable: true },
+          on_chain_tx_hash: { type: "string", nullable: true },
+          created_at: { type: "string", format: "date-time" },
+        },
+      },
+      GovernanceProposalWithVotes: {
+        allOf: [
+          { $ref: "#/components/schemas/GovernanceProposal" },
+          {
+            type: "object",
+            properties: {
+              votes: {
+                type: "array",
+                items: { $ref: "#/components/schemas/VoteIntent" },
+              },
+              vote_count: { type: "integer" },
+            },
+          },
+        ],
+      },
+      Pagination: {
+        type: "object",
+        properties: {
+          page: { type: "integer" },
+          pageSize: { type: "integer" },
+          total: { type: "integer" },
+          totalPages: { type: "integer" },
+          hasNext: { type: "boolean" },
+          hasPrev: { type: "boolean" },
+        },
+      },
+    },
+    // ── Reusable responses ────────────────────────────────────────────────────
+    responses: {
+      ValidationError: {
+        description: "Request validation failed",
+        content: {
+          "application/json": {
+            schema: { $ref: "#/components/schemas/ValidationError" },
+          },
+        },
+      },
+      Unauthorized: {
+        description: "Missing or invalid JWT token",
+        content: {
+          "application/json": {
+            schema: {
+              type: "object",
+              properties: {
+                success: { type: "boolean", example: false },
+                error: {
+                  type: "object",
+                  properties: {
+                    code: { type: "string", example: "UNAUTHORIZED" },
+                    message: { type: "string", example: "Missing token" },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      NotFound: {
+        description: "Resource not found",
+        content: {
+          "application/json": {
+            schema: {
+              type: "object",
+              properties: {
+                success: { type: "boolean", example: false },
+                error: {
+                  type: "object",
+                  properties: {
+                    code: { type: "string", example: "NOT_FOUND" },
+                    message: { type: "string" },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      InternalError: {
+        description: "Internal server error",
+        content: {
+          "application/json": {
+            schema: {
+              type: "object",
+              properties: {
+                success: { type: "boolean", example: false },
+                error: {
+                  type: "object",
+                  properties: {
+                    code: { type: "string", example: "INTERNAL_ERROR" },
+                    message: { type: "string" },
+                  },
+                },
+              },
             },
           },
         },

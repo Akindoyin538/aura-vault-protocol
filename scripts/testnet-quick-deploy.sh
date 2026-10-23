@@ -22,7 +22,12 @@ log "Network: $NETWORK | Deployer: $DEPLOYER_KEY"
 # 1. Verify environment
 log "Verifying environment..."
 if ! command -v stellar &> /dev/null; then
-  error "Stellar CLI not found. Install from https://github.com/stellar/stellar-cli"
+  error "Stellar CLI v21.3.0+ not found. Install from https://github.com/stellar/stellar-cli"
+fi
+STELLAR_VERSION=$(stellar --version | sed -E 's/.* ([0-9]+\.[0-9]+\.[0-9]+).*/\1/')
+IFS=. read -r STELLAR_MAJOR STELLAR_MINOR _ <<< "$STELLAR_VERSION"
+if [[ ! "$STELLAR_MAJOR" =~ ^[0-9]+$ || ! "$STELLAR_MINOR" =~ ^[0-9]+$ ]] || (( STELLAR_MAJOR < 21 || (STELLAR_MAJOR == 21 && STELLAR_MINOR < 3) )); then
+  error "Stellar CLI v21.3.0+ required; found $STELLAR_VERSION"
 fi
 if ! command -v cargo &> /dev/null; then
   error "Cargo not found. Install from https://rustup.rs"

@@ -22,7 +22,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { AccessibleModal, AmountInput, FormField, FormErrorMessage } from "./AccessibleFormComponents";
-import PreSignBreakdown from "./PreSignBreakdown";
+import { UsdAmountConverter } from "./UsdAmountConverter";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -366,6 +366,8 @@ export function DepositModal({
               </p>
             </div>
           )}
+
+          <UsdAmountConverter tokenAmount={amount} shareAmount={estimatedShares} />
 
           <button
             type="button"

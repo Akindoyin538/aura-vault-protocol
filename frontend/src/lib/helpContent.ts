@@ -13,6 +13,7 @@ export interface HelpEntry {
   title: string;
   /** One-to-two sentence plain-language explanation */
   description: string;
+  href: string;
 }
 
 export type HelpKey =
@@ -25,36 +26,41 @@ export type HelpKey =
 export const helpContent: Record<HelpKey, HelpEntry> = {
   vaultShares: {
     title: 'Vault Shares',
-    description:
-      'When you deposit tokens into the vault, you receive shares that represent your proportional ownership. ' +
-      'As the vault earns yield, each share becomes redeemable for more tokens — you don\'t need to do anything to benefit.',
+    description: 'A vault share is your proportional ownership of the tokens in the vault. As yield is added, each share can be redeemed for more tokens.',
+    href: '/faq#vault-shares',
   },
 
   apy: {
     title: 'Annual Percentage Yield (APY)',
-    description:
-      'APY shows how much your deposit could grow over one year if the current rate continues, ' +
-      'including the effect of compounding. A higher APY means faster growth, but past rates don\'t guarantee future returns.',
+    description: 'APY estimates one year of growth, including compounding. At 10% APY, 100 USDC could become about 110 USDC in a year if the rate holds. Past rates do not guarantee future returns.',
+    href: '/faq#apy',
   },
 
   totalAssets: {
     title: 'Total Assets',
-    description:
-      'The total number of underlying tokens currently held by the vault across all depositors. ' +
-      'This number grows whenever yield is harvested into the vault.',
+    description: 'All underlying tokens held for depositors, including yield already added to the vault.',
+    href: '/faq#vault-shares',
   },
 
   exchangeRate: {
     title: 'Exchange Rate',
-    description:
-      'The current redemption value of one vault share expressed in the underlying token. ' +
-      'For example, "1 share = 1.05 USDC" means each share has grown 5% since initial deposit.',
+    description: 'The amount of underlying tokens one share can redeem for. It is calculated as total vault assets divided by total shares.',
+    href: '/faq#vault-shares',
   },
 
   harvest: {
     title: 'Harvest',
-    description:
-      'Anyone can trigger a harvest to inject freshly-earned yield into the vault without minting new shares. ' +
-      'This raises the exchange rate for every existing shareholder — auto-compounding your returns.',
+    description: 'A keeper submits earned yield to the vault. The added assets increase the redemption value of existing shares, so returns compound.',
+    href: '/faq#yield',
+  },
+  autoCompounding: {
+    title: 'Auto-compounding',
+    description: 'Yield added to the vault earns future yield too. This can grow a balance faster than withdrawing and reinvesting rewards manually.',
+    href: '/faq#yield',
+  },
+  withdrawalCooldown: {
+    title: 'Withdrawal cooldown',
+    description: 'A cooldown is a waiting period before a withdrawal can be completed. Check the withdrawal screen for the current vault rules.',
+    href: '/faq#withdrawals',
   },
 };

@@ -34,6 +34,7 @@ All token amounts are expressed in **stroops** (the smallest indivisible unit). 
     - [proposal_status](#186-proposal_status)
 19. [Events Reference](#19-events-reference)
 20. [Storage Layout](#20-storage-layout)
+21. [Additional Public Methods and ABI Status](#21-additional-public-methods-and-abi-status)
 
 ---
 
@@ -265,7 +266,7 @@ stellar contract invoke \
 
 ## 5. harvest
 
-Permissionless keeper entry point. Injects yield (underlying token) into the vault, increasing the exchange rate for all shareholders. A performance fee is deducted before crediting `total_assets`. Requires caller authorization.
+Keeper entry point. Injects underlying yield and applies the configured performance fee. Net yield is tracked for the balance invariant immediately, then becomes visible to share pricing linearly over the configured vesting period (default seven days / 120,960 ledgers). `total_assets` and deposit/withdraw pricing include only the vested portion. A new harvest restarts the schedule for the still-unvested remainder plus the new net yield.
 
 ### Signature
 
@@ -293,7 +294,8 @@ fn harvest(
 ```
 fee_amount   = floor(yield_amount × perf_fee_bps / 10000)
 yield_net    = yield_amount - fee_amount
-total_assets += yield_net
+tracked_assets += yield_net
+visible_assets += vested portion of yield_net over the vesting period
 fees_collected += fee_amount
 ```
 
@@ -309,6 +311,9 @@ Default `perf_fee_bps` = 1000 (10%).
 | `ZeroShares` | `total_shares == 0` (no depositors yet) |
 | `BalanceMismatch` | Flash loan guard triggered |
 | `MathOverflow` | Arithmetic overflow |
+
+The admin can change the duration with `set_yield_vesting_period`; a zero
+duration is rejected. `get_yield_vesting_period` returns the current value.
 
 ### Events emitted
 
@@ -749,7 +754,7 @@ stellar contract invoke \
 
 ## 15. total_assets
 
-Read-only. Returns the total amount of underlying tokens currently tracked by the vault (net of fees, including accrued yield).
+Read-only. Returns underlying assets used for share pricing: deposits plus vested yield, minus withdrawals. Harvested yield is included linearly over its configured ledger period.
 
 ### Signature
 
@@ -759,7 +764,7 @@ fn total_assets(env: Env) -> i128
 
 ### Returns
 
-Total underlying token stroops held and tracked by the vault.
+Vested underlying asset value in stroops. Internal tracked token balance can be higher while harvested yield is unvested; mutating calls still compare the actual token balance with that internal tracked balance.
 
 ### Example
 
@@ -1207,3 +1212,54 @@ The reentrancy guard adds approximately:
 ---
 
 *Issues: [#345](https://github.com/soterika/aura-vault-protocol/issues/345), [#347](https://github.com/soterika/aura-vault-protocol/issues/347), [#385](https://github.com/soterika/aura-vault-protocol/issues/385)*
+
+## 21. Additional Public Methods and ABI Status
+
+The current Rust contract exports the following methods in addition to the
+core methods above. `aura-vault/src/lib.rs` is the ABI source of truth.
+
+| Signature | Return type | Purpose / principal failure condition |
+|---|---|---|
+| `set_withdrawal_queue_threshold(Env, Address, i128)` | `Result<(), VaultError>` | Admin configures the minimum queued withdrawal amount. |
+| `set_withdrawal_unbonding_secs(Env, Address, u64)` | `Result<(), VaultError>` | Admin configures queue unbonding duration. |
+| `set_withdrawal_fee(Env, Address, u32)` | `Result<(), VaultError>` | Admin sets fee bps; values above 500 fail. |
+| `get_withdrawal_queue_threshold(Env)` / `get_withdrawal_unbonding_secs(Env)` / `get_withdrawal_fee_bps(Env)` | `i128` / `u64` / `u32` | Read withdrawal queue and fee configuration. |
+| `claim_queued_withdrawal(Env, Address, u64)` | `Result<i128, VaultError>` | Claim a mature queued withdrawal; fails if missing or still unbonding. |
+| `get_withdrawal_entry(Env, u64)` | `Option<WithdrawalEntry>` | Read a queued withdrawal entry. |
+| `register_yield_token(Env, Address)` | `Result<(), VaultError>` | Admin registers an alternative yield token. |
+| `distribute_yield(Env, Address, i128)` / `collect_yield(Env, Address, i128)` | `Result<(), VaultError>` | Distribute underlying yield; `collect_yield` is an alias. |
+| `distribute_yield_token(Env, Address, Address, i128, i128)` | `Result<(), VaultError>` | Distribute a whitelisted alternative token against an underlying value. |
+| `preview_distribution(Env, i128)` | `Result<(i128, i128, i128, bool), VaultError>` | Preview net yield, fee, per-share increment, and representability. |
+| `collect_pending_yield(Env, Address)` / `pending_yield(Env, Address)` | `Result<i128, VaultError>` / `i128` | Collect or read a user's accrued yield. |
+| `distribution_epoch(Env)` | `u64` | Read the distribution counter. |
+| `pending_admin(Env)` / `propose_admin(Env, Address, Address)` / `accept_admin(Env, Address)` / `cancel_admin(Env, Address)` | `Option<Address>` / `Result<(), VaultError>` | Inspect and execute two-step admin transfer. |
+| `get_roles(Env, Address)` / `has_role_query(Env, Address, u32)` | `u32` / `bool` | Read an address's roles. |
+| `grant_role(Env, Address, u32, Address)` / `revoke_role(Env, Address, u32, Address)` | `Result<(), VaultError>` | Admin changes an address's role mask. |
+| `set_tvl_cap(Env, Address, i128)` / `get_tvl_cap(Env)` | `Result<(), VaultError>` / `i128` | Configure/read the TVL cap; zero disables the cap. |
+| `set_harvest_cooldown(Env, Address, u64)` / `reset_harvest_cooldown(Env, Address)` / `last_harvest_time(Env)` | `Result<(), VaultError>` / `u64` | Configure and inspect harvest cooldown state. |
+| `set_yield_vesting_period(Env, Address, u32)` / `get_yield_vesting_period(Env)` | `Result<(), VaultError>` / `u32` | Configure/read linear yield vesting in ledgers; default is 120,960 (seven days). |
+| `set_price_movement_limit(Env, Address, u32)` / `get_price_movement_limit(Env)` | `Result<(), VaultError>` / `u32` | Configure/read the share-price circuit breaker. |
+| `enable_whitelist(Env, Address)` / `disable_whitelist(Env, Address)` | `Result<(), VaultError>` | Toggle whitelist-only deposits. |
+| `add_to_whitelist(Env, Address, Address)` / `remove_from_whitelist(Env, Address, Address)` / `is_whitelisted(Env, Address)` | `Result<(), VaultError>` / `bool` | Manage and read depositor whitelist status. |
+| `set_min_deposit(Env, Address, i128)` / `min_deposit(Env)` | `Result<(), VaultError>` / `i128` | Configure/read the minimum deposit. |
+| `name(Env)` / `symbol(Env)` / `version(Env)` / `decimals(Env)` | `Option<String>` / `u32` | Read share metadata and contract version. |
+| `get_vault_error_message(Env, u32)` | `Option<String>` | Return a human-readable message for a known error code. |
+
+### Requested names absent from the current Soroban ABI
+
+The Rust contract does **not** currently export `set_fee_bps`,
+`set_withdrawal_fee_bps`, share `transfer`/`approve`/`transfer_from`/
+`allowance`, `set_deposit_cap`/`get_deposit_cap`, keeper-statistics methods,
+`deposit_with_swap`, or `set_dex_router`. The available methods are
+`set_fees`, `set_withdrawal_fee`, `set_tvl_cap`/`get_tvl_cap`, and the yield
+token methods listed above. Planned Solidity APIs must not be treated as part
+of the Soroban ABI.
+
+`harvest` and `harvest_token` retain tracked accounting for the balance invariant while
+`total_assets` exposes only vested yield. The vault vests each harvest linearly
+over the configured ledger period. A later harvest restarts the remaining
+unvested balance together with the new yield, so integrations should expect a
+more conservative vesting schedule after frequent harvests. Deposits and
+withdrawals price shares using the vested asset value. The separate
+[`yield-smoothing.md`](./yield-smoothing.md) document describes a Solidity
+design and is not the Soroban ABI specification.
