@@ -193,7 +193,7 @@ function SortableWidget({
     <div
       ref={setNodeRef}
       style={style}
-      className="group"
+      className="group motion-reduce:[&_*]:!transition-none"
       data-testid={`sortable-widget-${widget.id}`}
     >
       {/* Drag handle — shows on hover/focus */}
@@ -204,7 +204,7 @@ function SortableWidget({
         aria-label={`Drag to reorder ${widget.label} widget. Use arrow keys to reorder with keyboard.`}
         aria-roledescription="sortable"
         className={[
-          "absolute top-2 right-2 z-10 rounded-md p-1.5",
+          "absolute top-2 right-2 z-10 hidden rounded-md p-1.5 md:inline-flex",
           "text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200",
           "opacity-0 group-hover:opacity-100 focus:opacity-100",
           "transition-opacity duration-150",

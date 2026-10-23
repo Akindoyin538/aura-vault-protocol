@@ -1,7 +1,7 @@
 variable "aws_region" {
-  description = "AWS region for the production environment."
+  description = "AWS region for the production disaster-recovery replica."
   type        = string
-  default     = "us-east-1"
+  default     = "eu-west-1"
 }
 
 variable "replica_instance_class" {
@@ -11,7 +11,14 @@ variable "replica_instance_class" {
 }
 
 variable "replica_availability_zone" {
-  description = "Availability zone for the production read replica. Should differ from the primary AZ."
+  description = "Optional availability zone for the production DR replica. Leave empty to let AWS select one in eu-west-1."
   type        = string
-  default     = "us-east-1c"
+  default     = ""
+}
+
+variable "pagerduty_integration_key" {
+  description = "Optional PagerDuty Events API v2 integration key for the RDS replica-lag alarm. Configure through a secret variable."
+  type        = string
+  sensitive   = true
+  default     = ""
 }
