@@ -12,6 +12,9 @@
  */
 
 import crypto from "crypto";
+import http from "node:http";
+import https from "node:https";
+import { URL } from "node:url";
 import { getWritePool, getReadPool } from "../db.js";
 import { logger } from "../logger.js";
 
@@ -146,6 +149,7 @@ export async function deleteWebhook(id: string): Promise<boolean> {
 export interface DeliveryRow {
   id: string;
   webhook_id: string;
+  event_id: string | null;
   event_type: string;
   payload: Record<string, unknown>;
   status: "pending" | "success" | "failed";
@@ -161,7 +165,7 @@ export interface DeliveryRow {
 export async function getDeliveries(webhookId: string): Promise<DeliveryRow[]> {
   const pool = getReadPool();
   const result = await pool.query<DeliveryRow>(
-    `SELECT id, webhook_id, event_type, payload, status, attempts,
+    `SELECT id, webhook_id, event_id, event_type, payload, status, attempts,
             last_status_code, last_error, next_retry_at, created_at, updated_at
      FROM webhook_deliveries
      WHERE webhook_id = $1
@@ -202,19 +206,13 @@ async function attemptDelivery(
   let success = false;
 
   try {
-    const response = await fetch(webhook.url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Aura-Signature": signature,
-        "X-Aura-Event": delivery.event_type,
-        "X-Aura-Delivery": delivery.id,
-      },
-      body,
-      signal: AbortSignal.timeout(10_000),
+    statusCode = await postWebhook(webhook.url, body, {
+      "Content-Type": "application/json",
+      "X-Aura-Signature": signature,
+      "X-Aura-Event": delivery.event_type,
+      "X-Aura-Delivery": delivery.id,
     });
-    statusCode = response.status;
-    success = response.ok;
+    success = statusCode >= 200 && statusCode < 300;
   } catch (err) {
     error = err instanceof Error ? err.message : String(err);
   }
@@ -263,7 +261,7 @@ async function attemptDelivery(
   }
 
   // Schedule next retry with exponential backoff
-  const delayMs = BACKOFF_MS[newAttempts] ?? BACKOFF_MS[BACKOFF_MS.length - 1]!;
+  const delayMs = BACKOFF_MS[newAttempts - 1] ?? BACKOFF_MS[BACKOFF_MS.length - 1]!;
   const nextRetry = new Date(Date.now() + delayMs).toISOString();
 
   await pool.query(
@@ -281,6 +279,20 @@ async function attemptDelivery(
     },
     delayMs,
   );
+}
+
+function postWebhook(url: string, body: string, headers: Record<string, string>): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const destination = new URL(url);
+    const transport = destination.protocol === "https:" ? https : http;
+    const request = transport.request(destination, { method: "POST", headers }, (response) => {
+      response.resume();
+      response.on("end", () => resolve(response.statusCode ?? 500));
+    });
+    request.setTimeout(10_000, () => request.destroy(new Error("Webhook request timed out")));
+    request.on("error", reject);
+    request.end(body);
+  });
 }
 
 async function incrementFailures(pool: ReturnType<typeof getWritePool>, webhookId: string): Promise<number> {
@@ -318,7 +330,9 @@ async function retryDelivery(deliveryId: string, webhook: WebhookWithSecret): Pr
 export async function dispatchWebhookEvent(
   eventType: VaultEventType,
   payload: Record<string, unknown>,
+  eventId: string,
 ): Promise<void> {
+  if (!eventId.trim()) throw new TypeError("eventId must be a stable, non-empty event identifier");
   const pool = getWritePool();
 
   // Fetch all webhooks subscribed to this event type
@@ -333,10 +347,11 @@ export async function dispatchWebhookEvent(
   for (const webhook of webhooksResult.rows) {
     // Create delivery row
     const deliveryResult = await pool.query<DeliveryRow>(
-      `INSERT INTO webhook_deliveries (webhook_id, event_type, payload, next_retry_at)
-       VALUES ($1, $2, $3, NOW())
+      `INSERT INTO webhook_deliveries (webhook_id, event_id, event_type, payload, next_retry_at)
+       VALUES ($1, $2, $3, $4, NOW())
+       ON CONFLICT (webhook_id, event_id) WHERE event_id IS NOT NULL DO NOTHING
        RETURNING *`,
-      [webhook.id, eventType, JSON.stringify(payload)],
+      [webhook.id, eventId, eventType, JSON.stringify(payload)],
     );
     const delivery = deliveryResult.rows[0];
     if (!delivery) continue;

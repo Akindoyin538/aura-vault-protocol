@@ -10,6 +10,26 @@ variable "environment" {
   default     = "dev"
 }
 
+variable "cost_center" {
+  description = "Team or budget owner used for AWS Cost Explorer allocation."
+  type        = string
+  default     = "platform"
+  validation {
+    condition     = length(trimspace(var.cost_center)) > 0
+    error_message = "cost_center must be a non-empty team value."
+  }
+}
+
+variable "default_component" {
+  description = "Fallback cost allocation component for AWS resources without a more specific component tag."
+  type        = string
+  default     = "networking"
+  validation {
+    condition     = contains(["backend", "frontend", "database", "cache", "monitoring", "networking"], var.default_component)
+    error_message = "default_component must be one of backend, frontend, database, cache, monitoring, or networking."
+  }
+}
+
 variable "project_name" {
   description = "Project name for resource naming"
   type        = string

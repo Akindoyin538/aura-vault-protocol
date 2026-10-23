@@ -45,6 +45,8 @@ pub mod invariants;
 #[cfg(test)]
 mod security_test;
 #[cfg(test)]
+mod mutation_regression_test;
+#[cfg(test)]
 mod security_attacks;
 #[cfg(test)]
 mod proptest_strategies;

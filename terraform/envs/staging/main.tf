@@ -33,6 +33,15 @@ terraform {
 
 provider "aws" {
   region = var.aws_region
+  default_tags {
+    tags = {
+      Project     = "aura-vault-protocol"
+      Environment = "staging"
+      Component   = "database"
+      ManagedBy   = "terraform"
+      CostCenter  = "platform"
+    }
+  }
 }
 
 # ---------------------------------------------------------------------------
