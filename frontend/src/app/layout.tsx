@@ -7,7 +7,6 @@ import { ThemeProvider } from "@/components/ThemeProvider";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { LanguageSwitcher } from "@/components/LanguageSwitcher";
 import { ServiceWorkerRegistration } from "@/components/ServiceWorkerRegistration";
-import WalletConnect from "@/components/WalletConnect";
 import ProgressBar from "@/components/ProgressBar";
 import { OnboardingTour } from "@/components/OnboardingTour";
 import { HeaderWidgets } from "@/components/HeaderWidgets";
