@@ -18,6 +18,8 @@
         "eventsource": "^2.0.0"
     },
     "devDependencies": {
+        "@axe-core/playwright": "^4.13.0",
+        "@playwright/test": "^1.62.1",
         "@types/pg": "^8.10.0",
         "@types/node": "^20.0.0",
         "@types/eventsource": "^1.1.0",

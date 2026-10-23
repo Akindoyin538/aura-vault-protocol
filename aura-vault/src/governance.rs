@@ -92,6 +92,32 @@ pub struct MultiSigOp {
     pub expires_at: u64,
 }
 
+/// A stable, read-only projection of a governance operation for clients.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct ProposalView {
+    pub id: u64,
+    /// Operation variant and its encoded parameters.
+    pub action: OpType,
+    pub proposer: Address,
+    pub votes: u32,
+    pub threshold: u32,
+    pub status: ProposalViewStatus,
+    /// The operation can be executed immediately once it reaches the threshold.
+    /// Pending operations have no executable time yet.
+    pub executable_at: Option<u64>,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub enum ProposalViewStatus {
+    Pending,
+    TimelockActive,
+    Executable,
+    Executed,
+    Expired,
+}
+
 // ---------------------------------------------------------------------------
 // Storage key for a MultiSigOp (separate from DataKey to avoid naming conflict)
 // ---------------------------------------------------------------------------
@@ -297,6 +323,50 @@ pub fn get_operation_status(env: &Env, op_id: u64) -> Option<OpStatus> {
 /// Return the full operation record.
 pub fn get_operation(env: &Env, op_id: u64) -> Option<MultiSigOp> {
     get_op(env, op_id)
+}
+
+/// Return one proposal in the frontend-friendly view format.
+pub fn get_proposal_view(env: &Env, id: u64) -> Option<ProposalView> {
+    let op = get_op(env, id)?;
+    let now = env.ledger().timestamp();
+    let status = if matches!(op.status, OpStatus::Pending | OpStatus::Ready) && now > op.expires_at {
+        ProposalViewStatus::Expired
+    } else {
+        match op.status {
+            OpStatus::Pending => ProposalViewStatus::Pending,
+            OpStatus::Ready => ProposalViewStatus::Executable,
+            OpStatus::Executed => ProposalViewStatus::Executed,
+            OpStatus::Expired => ProposalViewStatus::Expired,
+        }
+    };
+    let executable_at = if matches!(&status, ProposalViewStatus::Executable) {
+        Some(now)
+    } else {
+        None
+    };
+    Some(ProposalView {
+        id: op.id,
+        action: op.op_type,
+        proposer: op.proposer,
+        votes: op.sig_count,
+        threshold: get_multisig_threshold(env),
+        status,
+        executable_at,
+    })
+}
+
+/// Return every non-expired proposal in creation order.
+pub fn get_proposal_views(env: &Env) -> Vec<ProposalView> {
+    let mut views = Vec::new(env);
+    let count = get_multisig_op_count(env);
+    for id in 1..=count {
+        if let Some(view) = get_proposal_view(env, id) {
+            if !matches!(&view.status, ProposalViewStatus::Expired) {
+                views.push_back(view);
+            }
+        }
+    }
+    views
 }
 
 // ---------------------------------------------------------------------------

@@ -42,6 +42,7 @@ services:
       - CACHE_DEFI_PRICE_TTL=${CACHE_DEFI_PRICE_TTL:-30}
       - CACHE_DEFI_POOL_TTL=${CACHE_DEFI_POOL_TTL:-60}
       - CACHE_API_TTL=${CACHE_API_TTL:-60}
+      - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-http://tempo:4318/v1/traces}
     depends_on:
       redis:
         condition: service_healthy
@@ -91,4 +92,5 @@ volumes:
 
 networks:
   aura-network:
+    name: aura-network
     driver: bridge

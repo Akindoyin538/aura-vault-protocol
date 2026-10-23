@@ -1,102 +1,66 @@
 import type { Metadata } from "next";
 import { Suspense } from "react";
-import Image from "next/image";
-
+import { Geist, Geist_Mono } from "next/font/google";
+import { NextIntlClientProvider } from "next-intl";
+import { getMessages } from "next-intl/server";
 import { ThemeProvider } from "@/components/ThemeProvider";
-import { LanguageSwitcher } from "@/components/LanguageSwitcher";
 import { ThemeToggle } from "@/components/ThemeToggle";
-// Issue #284: PWA service worker registration
+import { LanguageSwitcher } from "@/components/LanguageSwitcher";
 import { ServiceWorkerRegistration } from "@/components/ServiceWorkerRegistration";
 import ProgressBar from "@/components/ProgressBar";
 import { OnboardingTour } from "@/components/OnboardingTour";
 import { HeaderWidgets } from "@/components/HeaderWidgets";
 import { ToastProvider } from "@/components/toast";
+import { NotificationCenter, NotificationProvider } from "@/components/notifications";
 import NavHeader from "@/components/NavHeader";
-import { NotificationProvider, NotificationCenter } from "@/components/notifications";
-import {
-  FreighterNetworkProvider,
-  FreighterNetworkBanner,
-} from "@/components/FreighterNetworkBanner";
-// Issue #1266: React Query — QueryClientProvider
-import { QueryProvider } from "@/components/QueryProvider";
+import { FreighterNetworkBanner, FreighterNetworkProvider } from "@/components/FreighterNetworkBanner";
+import { NetworkStatusBanner } from "@/components/NetworkStatusBanner";
 import "./globals.css";
 
 export const metadata: Metadata = {
   title: "Aura Vault Protocol",
-  description:
-    "Share-based yield vault on Stellar — deposit, compound, and withdraw with Freighter.",
+  description: "Share-based yield vault on Stellar — deposit, compound, and withdraw with Freighter.",
   manifest: "/manifest.json",
-  // Issue #284: PWA theme colour used by browsers on mobile
   themeColor: "#6366f1",
-  appleWebApp: {
-    capable: true,
-    title: "Aura Vault",
-    statusBarStyle: "black-translucent",
-  },
+  appleWebApp: { capable: true, title: "Aura Vault", statusBarStyle: "black-translucent" },
 };
 
-// Root layout — minimal wrapper required by Next.js App Router.
-// All locale-specific rendering is handled by app/[locale]/layout.tsx.
-// Inline script runs before React hydration to prevent theme flash.
-// Must use the same localStorage key as ThemeProvider: "aura-theme"
-const noFlashScript = `(function(){try{var t=localStorage.getItem('aura-theme');var d=t==='dark'||(t!=='light'&&window.matchMedia('(prefers-color-scheme: dark)').matches);document.documentElement.classList.toggle('dark',d);}catch(e){}})();`;
+const configuredNetwork = (process.env.NEXT_PUBLIC_STELLAR_NETWORK ?? "testnet").toLowerCase();
+const warningNetwork = configuredNetwork === "futurenet" ? "futurenet" : "testnet";
+const geistSans = Geist({ variable: "--font-geist-sans", subsets: ["latin"] });
+const geistMono = Geist_Mono({ variable: "--font-geist-mono", subsets: ["latin"] });
 
-export default function RootLayout({
-  children,
-}: {
-  children: React.ReactNode;
-}) {
+export default async function RootLayout({ children }: { children: React.ReactNode }) {
+  const messages = await getMessages();
   return (
-    /*
-      suppressHydrationWarning is strictly necessary on <html> because ThemeProvider and LanguageSwitcher
-      dynamically modify the root html element's class ("dark") and attributes ("lang", "dir") on the client
-      based on localStorage and system color scheme preferences (prefers-color-scheme).
-      Next.js and React specifically recommend suppressHydrationWarning for <html> in themes/i18n to prevent
-      root-level attribute mismatch warnings while preserving full hydration validation for children.
-    */
-    <html
-      lang="en"
-      dir="ltr"
-      className="h-full antialiased"
-      suppressHydrationWarning
-    >
-      {/* Prevent theme flash before hydration */}
-      <head>
-        <script dangerouslySetInnerHTML={{ __html: noFlashScript }} />
-      </head>
-      <body className="min-h-full flex flex-col bg-white text-zinc-900 transition-colors duration-200 dark:bg-zinc-950 dark:text-zinc-100">
-        {/* Issue #1266: React Query cache */}
-        <QueryProvider>
-          <ThemeProvider>
-            <NotificationProvider>
+    <html lang="en" className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}>
+      <body className="min-h-full flex flex-col bg-white text-zinc-900 dark:bg-zinc-950 dark:text-zinc-100">
+        <ThemeProvider>
+          <NextIntlClientProvider messages={messages}>
+            <ToastProvider>
+              <NotificationProvider>
               <FreighterNetworkProvider>
-                <ToastProvider>
-                  {/* Slim progress bar for page transitions and API calls (#266) */}
-                  <Suspense fallback={null}>
-                    <ProgressBar />
-                  </Suspense>
-
-                  {/* Onboarding tour — auto-starts on first visit, restartable from Settings */}
-                  <OnboardingTour />
-
-                  {/* Network mismatch warning — shown at top of every page */}
-                  <FreighterNetworkBanner />
-
-                  {/* Unified responsive navigation header — #242
-                      Desktop (≥768px): logo + nav links + wallet button
-                      Mobile  (<768px): logo + hamburger → slide-in drawer */}
-                  <NavHeader />
-
-                  {/* Page content */}
-                  {children}
-
-                  {/* Issue #284: PWA install prompt */}
-                  <ServiceWorkerRegistration />
-                </ToastProvider>
+                {configuredNetwork !== "mainnet" && <NetworkStatusBanner network={warningNetwork} />}
+                <FreighterNetworkBanner />
+                <Suspense fallback={null}><ProgressBar /></Suspense>
+                <OnboardingTour />
+                <NavHeader />
+                <header className="flex flex-wrap items-center justify-between gap-4 border-b border-zinc-200 px-4 py-3 dark:border-zinc-800 sm:px-6">
+                  <HeaderWidgets />
+                  <div className="flex items-center gap-4">
+                    <WalletConnect />
+                    <NotificationCenter />
+                    <LanguageSwitcher />
+                    <ThemeToggle />
+                  </div>
+                </header>
+                <main className="flex flex-1 flex-col">{children}</main>
+                <ServiceWorkerRegistration />
               </FreighterNetworkProvider>
-            </NotificationProvider>
-          </ThemeProvider>
-        </QueryProvider>
+              </NotificationProvider>
+            </ToastProvider>
+          </NextIntlClientProvider>
+        </ThemeProvider>
       </body>
     </html>
   );

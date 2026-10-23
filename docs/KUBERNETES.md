@@ -6,21 +6,22 @@
 ## Table of Contents
 
 1. [Prerequisites](#prerequisites)
-2. [Cluster Architecture Overview](#cluster-architecture-overview)
-3. [Namespace Setup](#namespace-setup)
-4. [RBAC Configuration](#rbac-configuration)
-5. [Network Policies](#network-policies)
-6. [Secrets Management](#secrets-management)
-7. [Frontend Deployment](#frontend-deployment)
-8. [Backend API Deployment](#backend-api-deployment)
-9. [Database Deployment (PostgreSQL)](#database-deployment-postgresql)
-10. [Redis Deployment](#redis-deployment)
-11. [Monitoring Stack Deployment](#monitoring-stack-deployment)
-12. [Horizontal Pod Autoscaling (HPA)](#horizontal-pod-autoscaling-hpa)
-13. [Ingress Configuration](#ingress-configuration)
-14. [Health Checks and Readiness](#health-checks-and-readiness)
-15. [Rolling Updates and Rollback](#rolling-updates-and-rollback)
-16. [Troubleshooting](#troubleshooting)
+2. [GitOps with Argo CD](#gitops-with-argo-cd)
+3. [Cluster Architecture Overview](#cluster-architecture-overview)
+4. [Namespace Setup](#namespace-setup)
+5. [RBAC Configuration](#rbac-configuration)
+6. [Network Policies](#network-policies)
+7. [Secrets Management](#secrets-management)
+8. [Frontend Deployment](#frontend-deployment)
+9. [Backend API Deployment](#backend-api-deployment)
+10. [Database Deployment (PostgreSQL)](#database-deployment-postgresql)
+11. [Redis Deployment](#redis-deployment)
+12. [Monitoring Stack Deployment](#monitoring-stack-deployment)
+13. [Horizontal Pod Autoscaling (HPA)](#horizontal-pod-autoscaling-hpa)
+14. [Ingress Configuration](#ingress-configuration)
+15. [Health Checks and Readiness](#health-checks-and-readiness)
+16. [Rolling Updates and Rollback](#rolling-updates-and-rollback)
+17. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -59,6 +60,47 @@ Verify metrics-server is available:
 ```bash
 kubectl top nodes
 ```
+
+## GitOps with Argo CD
+
+`k8s/argocd/` contains the Argo CD Helm chart configuration and Application
+resources for backend, frontend, monitoring, and database. The applications
+read their manifests from `k8s/backend`, `k8s/frontend`, `k8s/monitoring`, and
+`k8s/database` Kustomize directories. Staging applications automatically sync
+changes from the configured Git revision; production applications require an
+operator to review and sync them manually. Staging uses the in-cluster
+PostgreSQL manifest. Production's database application deploys Redis only and
+leaves PostgreSQL on managed RDS; its Redis-only Kustomize path is
+`k8s/argocd/apps/production/database`.
+
+Install the chart from a trusted administrative workstation after connecting to
+the cluster through the organization VPN:
+
+```bash
+helm dependency build k8s/argocd
+helm upgrade --install argocd k8s/argocd \
+  --namespace argocd --create-namespace \
+  --values k8s/argocd/values.yaml
+```
+
+The chart sets the Argo CD server service to `ClusterIP` and disables ingress.
+Keep it on the private cluster network and permit access only through the VPN;
+do not add a public load balancer or ingress. Use a private cluster/VPN route
+or `kubectl port-forward` for administrative access.
+
+The Application resources retain the last ten deployed revisions. Review an
+application's history before rollback, then use the Argo CD UI or CLI:
+
+```bash
+argocd app history aura-vault-production-backend
+argocd app rollback aura-vault-production-backend <history-id>
+```
+
+The manifests deliberately do not apply `k8s/backend/secret.yaml`, whose values
+are placeholders. Provision the required backend secret in each application
+namespace through the approved secret manager before syncing the backend. Never
+commit live credentials to Git. Configure `repository.url` and `revision` in
+`k8s/argocd/values.yaml` for the deployment repository and release policy.
 
 ### Image Registry
 

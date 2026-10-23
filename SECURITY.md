@@ -712,6 +712,8 @@ On-call engineer (Slack + PagerDuty) — acknowledges
 - Documentation typos or formatting issues
 - Theoretical issues with no realistic exploit path
 - Vulnerabilities in third-party dependencies not yet reflected in a CVE advisory (report those upstream)
+- Social engineering, phishing, physical attacks, and denial of service against third-party services
+- Issues in third-party services or software where Aura Vault has no control over remediation
 
 ### Severity Classification
 
@@ -730,7 +732,9 @@ On-call engineer (Slack + PagerDuty) — acknowledges
 2. **Submit your report** via GitHub Security Advisories on this repository:
    `Settings → Security → Advisories → New draft security advisory`
 
-   Alternatively, email the address in this repository's GitHub profile security contact.
+   Alternatively, email **security@auravault.io**. Do not include active secrets or
+   user data in an unencrypted email; use a private GitHub Security Advisory until
+   the project publishes a verified PGP key.
 
 3. **Include in your report:**
    - Severity assessment with rationale
@@ -743,15 +747,33 @@ On-call engineer (Slack + PagerDuty) — acknowledges
 
    | Severity | Acknowledgement | Triage | Fix / Coordinated Disclosure |
    |---|---|---|---|
-   | Critical / High | 72 hours | 7 days | 30 days |
-   | Medium | 72 hours | 14 days | 90 days |
-   | Low / Info | 7 days | 30 days | Next release cycle |
+   | Critical | 24 hours | 72 hours | 30 days |
+   | High | 24 hours | 72 hours | 90 days or coordinated disclosure |
+   | Medium | 24 hours | 7 days | 90 days |
+   | Low / Info | 72 hours | 14 days | Next release cycle |
 
-5. **Recognition:** Reporters of Critical and High issues will be credited publicly in the changelog and this document (with consent). No formal bug bounty program is currently active.
+5. **Bug bounty and recognition:** No bounty program or reward pool is funded. Current rewards are:
+
+   | Severity | Current reward |
+   |---|---:|
+   | Critical | $0 USD |
+   | High | $0 USD |
+   | Medium | $0 USD |
+   | Low / Informational | $0 USD |
+
+   Reporting does not create an entitlement to payment. With the reporter's consent, maintainers may add an acknowledgment to the security hall of fame below.
+
+### Security Hall of Fame
+
+No researchers have been listed yet. Names are published only with the reporter's consent.
 
 ### Safe Harbor
 
 Security researchers acting in good faith under this policy — who do not exploit vulnerabilities beyond proof-of-concept, do not access or exfiltrate user data, and report promptly — will not face legal action from the Protocol maintainers.
+
+This safe-harbor text is an operational statement from the repository maintainers,
+not legal advice. It has **not** received legal review; maintainers should obtain
+that review before representing it as legally binding.
 
 ---
 
