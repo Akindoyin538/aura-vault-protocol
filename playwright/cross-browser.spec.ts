@@ -3,11 +3,31 @@ import { test, expect } from "@playwright/test";
 // Inject a Freighter stub before every test
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => {
+    // Stable provider fixtures let Firefox and WebKit exercise the same
+    // connect/disconnect UI without requiring Chromium-only extensions.
     (window as any).freighterApi = {
-      isConnected: async () => true,
-      getPublicKey: async () => "GABC1234TESTPUBLICKEY",
-      getNetwork: async () => "TESTNET",
-      signTransaction: async () => "signed_xdr",
+      isConnected: async () => false,
+      getPublicKey: async () => "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+      getNetwork: async () => ({ network: "TESTNET" }),
+      signTransaction: async (xdr: string) => xdr,
+    };
+    (window as any).ethereum = {
+      isMetaMask: true,
+      request: async ({ method }: { method: string }) =>
+        method === "eth_accounts" || method === "eth_requestAccounts"
+          ? ["0x0000000000000000000000000000000000000001"]
+          : null,
+      on: () => undefined,
+      removeListener: () => undefined,
+    };
+    (window as any).coinbaseWalletExtension = {
+      isCoinbaseWallet: true,
+      request: async ({ method }: { method: string }) =>
+        method === "eth_accounts" || method === "eth_requestAccounts"
+          ? ["0x0000000000000000000000000000000000000002"]
+          : null,
+      on: () => undefined,
+      removeListener: () => undefined,
     };
   });
   // Stub vault API calls

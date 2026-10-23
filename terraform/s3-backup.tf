@@ -18,7 +18,7 @@ resource "aws_kms_key" "backup" {
   tags = {
     Name        = "${var.project_name}-backup-key-${var.environment}"
     Project     = var.project_name
-    Environment = var.environment
+    Environment = local.cost_environment
     ManagedBy   = "terraform"
   }
 }
@@ -35,7 +35,7 @@ resource "aws_s3_bucket" "postgres_backup" {
   tags = {
     Name        = "${var.project_name}-db-backups-${var.environment}"
     Project     = var.project_name
-    Environment = var.environment
+    Environment = local.cost_environment
     ManagedBy   = "terraform"
     Purpose     = "postgresql-backups"
   }
@@ -196,7 +196,7 @@ resource "aws_iam_role" "backup_job" {
   tags = {
     Name        = "${var.project_name}-backup-job-${var.environment}"
     Project     = var.project_name
-    Environment = var.environment
+    Environment = local.cost_environment
     ManagedBy   = "terraform"
   }
 }
@@ -295,7 +295,7 @@ resource "aws_kms_key" "backup_replica" {
   tags = {
     Name        = "${var.project_name}-backup-replica-key-${var.environment}"
     Project     = var.project_name
-    Environment = var.environment
+    Environment = local.cost_environment
     ManagedBy   = "terraform"
     Region      = "us-west-2"
   }
@@ -315,7 +315,7 @@ resource "aws_s3_bucket" "postgres_backup_replica" {
   tags = {
     Name        = "${var.project_name}-db-backups-replica-${var.environment}"
     Project     = var.project_name
-    Environment = var.environment
+    Environment = local.cost_environment
     ManagedBy   = "terraform"
     Purpose     = "postgresql-backups-dr-replica"
     Region      = "us-west-2"
@@ -437,7 +437,7 @@ resource "aws_iam_role" "backup_replication" {
   tags = {
     Name        = "${var.project_name}-backup-replication-${var.environment}"
     Project     = var.project_name
-    Environment = var.environment
+    Environment = local.cost_environment
     ManagedBy   = "terraform"
   }
 }
@@ -591,7 +591,7 @@ resource "aws_cloudwatch_metric_alarm" "replication_lag" {
   tags = {
     Name        = "${var.project_name}-backup-replication-lag-${var.environment}"
     Project     = var.project_name
-    Environment = var.environment
+    Environment = local.cost_environment
     ManagedBy   = "terraform"
   }
 }

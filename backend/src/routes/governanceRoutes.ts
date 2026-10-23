@@ -1,276 +1,432 @@
 /**
- * Governance Proposals Routes — Issue #1268
+ * Governance Routes — Issue #1267
  *
- * GET  /api/v1/governance/proposals          — list non-expired proposals (paginated)
- * GET  /api/v1/governance/proposals/:id      — get single proposal with votes
- * POST /api/v1/governance/proposals/:id/vote — record off-chain vote intent (auth required)
- * GET  /api/v1/governance/proposals/:id/status — real-time on-chain status
+ * GET  /api/v1/governance/proposals
+ *   Returns the list of governance proposals with their current status.
+ *   Auth-required: only authenticated users may browse proposals.
  *
- * Closes #1268
+ * GET  /api/v1/governance/proposals/:id
+ *   Returns a single proposal by ID.
+ *
+ * POST /api/v1/governance/proposals/:id/vote
+ *   Cast a vote on a proposal (calls the on-chain contract via a signed XDR).
+ *   Body: { xdr: string, signer: string }
+ *
+ * POST /api/v1/governance/proposals/:id/execute
+ *   Execute a proposal that has met threshold and passed the timelock.
+ *   Body: { xdr: string }
+ *
+ * GET  /api/v1/governance/proposals/stream
+ *   SSE stream that emits proposal state changes in real time.
+ *
+ * NOTE: Contract interaction (on-chain) is stubbed here — in production
+ * the XDR would be submitted to the Horizon RPC. The in-memory store
+ * simulates the contract state for integration testing.
  */
 
-import { Router, type Request, type Response } from "express";
-import { z } from "zod";
+import { Router, Request, Response } from "express";
 import { authenticate } from "../middleware/authMiddleware.js";
-import { validate } from "../validation.js";
-import {
-  successResponse,
-  errorResponse,
-  paginatedResponse,
-} from "../dto/ApiResponseDto.js";
+import { successResponse, errorResponse } from "../dto/index.js";
 import { logger } from "../logger.js";
-import {
-  listProposals,
-  getProposalById,
-  recordVoteIntent,
-  getOnChainProposalStatus,
-  type ProposalStatus,
-} from "../services/governanceService.js";
 
 export const governanceRouter = Router();
 
-// ── Validation schemas ────────────────────────────────────────────────────────
+// ── Types ─────────────────────────────────────────────────────────────────────
 
-const VALID_STATUSES: ProposalStatus[] = [
-  "active",
-  "approved",
-  "rejected",
-  "executed",
-  "expired",
-  "cancelled",
-];
+export type ProposalStatus =
+  | "Pending"
+  | "TimelockActive"
+  | "Executable"
+  | "Executed"
+  | "Rejected";
 
-const listQuerySchema = z.object({
-  page: z.coerce.number().int().positive().default(1),
-  pageSize: z.coerce.number().int().min(1).max(100).default(20),
-  status: z.enum(["active", "approved", "rejected", "executed", "expired", "cancelled"]).optional(),
-  includeExpired: z
-    .string()
-    .optional()
-    .transform((v) => v === "true"),
-});
-
-const voteBodySchema = z.object({
-  support: z.boolean({
-    required_error: "support is required",
-    invalid_type_error: "support must be a boolean",
-  }),
-  comment: z
-    .string()
-    .max(500, "comment must be at most 500 characters")
-    .optional(),
-});
-
-// ── Helper: validate UUID param ───────────────────────────────────────────────
-
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-function isUuid(value: string): boolean {
-  return UUID_RE.test(value);
+export interface GovernanceProposal {
+  id: string;
+  title: string;
+  description: string;
+  status: ProposalStatus;
+  proposer: string;
+  createdAt: string;
+  /** True once the signature count reaches requiredSignatures. */
+  thresholdMet: boolean;
+  /** ISO timestamp when the timelock period started (null if not yet met threshold). */
+  timelockStartedAt: string | null;
+  /** ISO timestamp when timelock expires and execution is allowed (null until threshold met). */
+  timelockExpiresAt: string | null;
+  /** Same as timelockExpiresAt — alias for UI display. */
+  executableAt: string | null;
+  votesFor: number;
+  votesAgainst: number;
+  requiredSignatures: number;
+  /** Addresses that have already voted. */
+  signers: string[];
 }
 
-// ── GET /api/v1/governance/proposals ─────────────────────────────────────────
+// ── In-memory store (simulates on-chain state) ────────────────────────────────
+// In production this would be sourced from contract event indexer / DB.
 
-/**
- * List all non-expired proposals (default).
- *
- * Query params:
- *   page         - Page number (default 1)
- *   pageSize     - Items per page, 1–100 (default 20)
- *   status       - Filter by lifecycle status
- *   includeExpired - Set to "true" to include expired proposals
- *
- * Response 200: paginated ApiResponseDto
- */
-governanceRouter.get(
-  "/proposals",
-  async (req: Request, res: Response): Promise<void> => {
-    const parsed = listQuerySchema.safeParse(req.query);
-    if (!parsed.success) {
-      const first = parsed.error.issues[0];
-      res.status(400).json(
-        errorResponse(
-          "VALIDATION_ERROR",
-          `Invalid query parameter: ${first?.path.join(".") ?? "unknown"} — ${first?.message ?? "invalid"}`,
-          parsed.error.issues.map((i) => ({
-            field: i.path.join("."),
-            message: i.message,
-          })),
-        ),
-      );
-      return;
-    }
+const TIMELOCK_DURATION_MS = 2 * 24 * 60 * 60 * 1000; // 48 hours
 
-    const { page, pageSize, status, includeExpired } = parsed.data;
+const now = new Date();
+const twoDaysAgo = new Date(now.getTime() - TIMELOCK_DURATION_MS - 3_600_000);
+const inOneDayMs = now.getTime() + 24 * 60 * 60 * 1000;
 
+const proposals = new Map<string, GovernanceProposal>([
+  [
+    "prop-1",
+    {
+      id: "prop-1",
+      title: "Upgrade vault contract to v2",
+      description:
+        "This proposal upgrades the AuraVault Soroban contract from v1 to v2, enabling multi-asset deposits and dynamic fee tiers. Requires 3-of-5 multisig approval and a 48-hour timelock.",
+      status: "Pending",
+      proposer: "GADMIN1EXAMPLESTELLARADDRESS",
+      createdAt: new Date(now.getTime() - 3 * 24 * 60 * 60 * 1000).toISOString(),
+      thresholdMet: false,
+      timelockStartedAt: null,
+      timelockExpiresAt: null,
+      executableAt: null,
+      votesFor: 1,
+      votesAgainst: 0,
+      requiredSignatures: 3,
+      signers: ["GADMIN1EXAMPLESTELLARADDRESS"],
+    },
+  ],
+  [
+    "prop-2",
+    {
+      id: "prop-2",
+      title: "Adjust harvest fee from 0.5% to 0.3%",
+      description:
+        "Reduces keeper harvest fee to attract more external keepers and improve yield compounding frequency.",
+      status: "Executable",
+      proposer: "GADMIN2EXAMPLESTELLARADDRESS",
+      createdAt: twoDaysAgo.toISOString(),
+      thresholdMet: true,
+      timelockStartedAt: twoDaysAgo.toISOString(),
+      timelockExpiresAt: new Date(twoDaysAgo.getTime() + TIMELOCK_DURATION_MS).toISOString(),
+      executableAt: new Date(twoDaysAgo.getTime() + TIMELOCK_DURATION_MS).toISOString(),
+      votesFor: 3,
+      votesAgainst: 0,
+      requiredSignatures: 3,
+      signers: [
+        "GADMIN2EXAMPLESTELLARADDRESS",
+        "GADMIN3EXAMPLESTELLARADDRESS",
+        "GADMIN4EXAMPLESTELLARADDRESS",
+      ],
+    },
+  ],
+  [
+    "prop-3",
+    {
+      id: "prop-3",
+      title: "Enable emergency pause for first 7 days after v2 deploy",
+      description:
+        "Grants a temporary guardian role that can pause deposits for a 7-day window immediately following the v2 upgrade.",
+      status: "TimelockActive",
+      proposer: "GADMIN3EXAMPLESTELLARADDRESS",
+      createdAt: new Date(now.getTime() - 1 * 24 * 60 * 60 * 1000).toISOString(),
+      thresholdMet: true,
+      timelockStartedAt: new Date(now.getTime() - 6 * 60 * 60 * 1000).toISOString(),
+      timelockExpiresAt: new Date(inOneDayMs + 18 * 60 * 60 * 1000).toISOString(),
+      executableAt: new Date(inOneDayMs + 18 * 60 * 60 * 1000).toISOString(),
+      votesFor: 3,
+      votesAgainst: 0,
+      requiredSignatures: 3,
+      signers: [
+        "GADMIN3EXAMPLESTELLARADDRESS",
+        "GADMIN4EXAMPLESTELLARADDRESS",
+        "GADMIN5EXAMPLESTELLARADDRESS",
+      ],
+    },
+  ],
+]);
+
+// ── SSE subscriber registry ───────────────────────────────────────────────────
+
+type SseClient = Response;
+const sseClients = new Set<SseClient>();
+
+function broadcastProposalUpdate(proposal: GovernanceProposal) {
+  const payload = JSON.stringify(proposal);
+  for (const client of sseClients) {
     try {
-      const result = await listProposals({ page, pageSize, status, includeExpired });
-      res
-        .status(200)
-        .json(paginatedResponse(result.proposals, page, pageSize, result.total));
-    } catch (err) {
-      logger.error({ err }, "[governance] list proposals failed");
-      res
-        .status(500)
-        .json(errorResponse("INTERNAL_ERROR", "Failed to retrieve governance proposals"));
+      client.write(`event: proposal_updated\ndata: ${payload}\n\n`);
+    } catch {
+      sseClients.delete(client);
     }
-  },
-);
+  }
+}
 
-// ── GET /api/v1/governance/proposals/:id ─────────────────────────────────────
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+function recomputeStatus(proposal: GovernanceProposal): ProposalStatus {
+  if (proposal.status === "Executed" || proposal.status === "Rejected") {
+    return proposal.status;
+  }
+  if (!proposal.thresholdMet) return "Pending";
+  if (!proposal.timelockExpiresAt) return "TimelockActive";
+  const now = Date.now();
+  if (now < new Date(proposal.timelockExpiresAt).getTime()) return "TimelockActive";
+  return "Executable";
+}
+
+// ── Routes ────────────────────────────────────────────────────────────────────
 
 /**
- * Get a single proposal with its full vote list.
- *
- * Response 200: { success: true, data: ProposalWithVotes }
- * Response 404: proposal not found
+ * GET /api/v1/governance/proposals/stream
+ * SSE stream — must be registered before the :id routes to avoid param capture.
  */
-governanceRouter.get(
-  "/proposals/:id",
-  async (req: Request, res: Response): Promise<void> => {
-    const { id } = req.params;
+governanceRouter.get("/proposals/stream", authenticate, (req: Request, res: Response): void => {
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+  res.flushHeaders();
 
-    if (!isUuid(id)) {
-      res
-        .status(400)
-        .json(errorResponse("INVALID_ID", "Proposal ID must be a valid UUID"));
-      return;
-    }
+  sseClients.add(res);
 
+  // Send a keepalive comment every 30 s
+  const keepalive = setInterval(() => {
     try {
-      const proposal = await getProposalById(id);
-
-      if (!proposal) {
-        res.status(404).json(errorResponse("NOT_FOUND", "Governance proposal not found"));
-        return;
-      }
-
-      res.status(200).json(successResponse(proposal));
-    } catch (err) {
-      logger.error({ err, id }, "[governance] get proposal failed");
-      res
-        .status(500)
-        .json(errorResponse("INTERNAL_ERROR", "Failed to retrieve governance proposal"));
+      res.write(": keepalive\n\n");
+    } catch {
+      clearInterval(keepalive);
     }
-  },
-);
+  }, 30_000);
 
-// ── POST /api/v1/governance/proposals/:id/vote ───────────────────────────────
+  req.on("close", () => {
+    clearInterval(keepalive);
+    sseClients.delete(res);
+  });
+});
 
 /**
- * Record an off-chain vote intent for an authenticated user.
+ * GET /api/v1/governance/proposals
+ * Returns all proposals, ordered newest first.
+ * Optional query params: status, page, pageSize
+ */
+governanceRouter.get("/proposals", authenticate, (req: Request, res: Response): void => {
+  try {
+    const statusFilter = req.query.status as ProposalStatus | undefined;
+    const page = Math.max(1, parseInt(String(req.query.page ?? "1"), 10));
+    const pageSize = Math.min(
+      50,
+      Math.max(1, parseInt(String(req.query.pageSize ?? "20"), 10))
+    );
+
+    let list = Array.from(proposals.values()).map((p) => ({
+      ...p,
+      status: recomputeStatus(p),
+    }));
+
+    if (statusFilter) {
+      list = list.filter((p) => p.status === statusFilter);
+    }
+
+    // Sort newest first
+    list.sort(
+      (a, b) =>
+        new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+    );
+
+    const total = list.length;
+    const slice = list.slice((page - 1) * pageSize, page * pageSize);
+
+    res.json(
+      successResponse({
+        proposals: slice,
+        total,
+        page,
+        pageSize,
+        totalPages: Math.ceil(total / pageSize),
+      })
+    );
+  } catch (err) {
+    logger.error("[governance/proposals]", err);
+    res
+      .status(500)
+      .json(errorResponse("INTERNAL_ERROR", "Failed to fetch proposals"));
+  }
+});
+
+/**
+ * GET /api/v1/governance/proposals/:id
+ */
+governanceRouter.get("/proposals/:id", authenticate, (req: Request, res: Response): void => {
+  const proposal = proposals.get(req.params.id);
+  if (!proposal) {
+    res
+      .status(404)
+      .json(errorResponse("NOT_FOUND", `Proposal ${req.params.id} not found`));
+    return;
+  }
+  res.json(
+    successResponse({ ...proposal, status: recomputeStatus(proposal) })
+  );
+});
+
+/**
+ * POST /api/v1/governance/proposals/:id/vote
+ * Body: { xdr: string, signer: string }
  *
- * Requires: Bearer JWT (authenticate middleware)
- *
- * Body: { support: boolean, comment?: string }
- *
- * After recording, the client is guided to sign and broadcast the on-chain
- * governance transaction to finalise the vote.
- *
- * Response 201: { success: true, data: { voteIntent, nextStep } }
- * Response 400: already voted or proposal not active
- * Response 401: not authenticated
- * Response 404: proposal not found
+ * Validates that the signer hasn't voted yet, records the vote,
+ * and transitions the proposal to TimelockActive if threshold is met.
  */
 governanceRouter.post(
   "/proposals/:id/vote",
   authenticate,
-  validate(voteBodySchema),
-  async (req: Request, res: Response): Promise<void> => {
-    const { id } = req.params;
-
-    if (!isUuid(id)) {
+  (req: Request, res: Response): void => {
+    const proposal = proposals.get(req.params.id);
+    if (!proposal) {
       res
-        .status(400)
-        .json(errorResponse("INVALID_ID", "Proposal ID must be a valid UUID"));
+        .status(404)
+        .json(
+          errorResponse("NOT_FOUND", `Proposal ${req.params.id} not found`)
+        );
       return;
     }
 
-    const { support, comment } = req.body as z.infer<typeof voteBodySchema>;
-    const voterAddress = (req as Request & { user: { sub: string } }).user.sub;
+    const { xdr, signer } = req.body as { xdr?: string; signer?: string };
 
-    try {
-      const voteIntent = await recordVoteIntent({
-        proposalId: id,
-        voterAddress,
-        support,
-        comment,
-      });
-
-      res.status(201).json(
-        successResponse({
-          voteIntent,
-          nextStep: {
-            action: "sign_on_chain",
-            message:
-              "Your off-chain vote intent has been recorded. " +
-              "To finalise, sign and broadcast the governance vote transaction using Freighter.",
-            proposalId: id,
-            support,
-          },
-        }),
-      );
-    } catch (err) {
-      const code = (err as NodeJS.ErrnoException).code;
-      const message = err instanceof Error ? err.message : "Vote failed";
-
-      if (code === "NOT_FOUND") {
-        res.status(404).json(errorResponse("NOT_FOUND", message));
-        return;
-      }
-      if (code === "ALREADY_VOTED") {
-        res.status(409).json(errorResponse("ALREADY_VOTED", message));
-        return;
-      }
-      if (code === "PROPOSAL_NOT_ACTIVE" || code === "PROPOSAL_EXPIRED") {
-        res.status(422).json(errorResponse(code, message));
-        return;
-      }
-
-      logger.error({ err, id, voterAddress }, "[governance] vote intent failed");
-      res.status(500).json(errorResponse("INTERNAL_ERROR", "Failed to record vote intent"));
+    if (!signer || typeof signer !== "string" || signer.trim().length === 0) {
+      res
+        .status(400)
+        .json(errorResponse("MISSING_SIGNER", "signer address is required"));
+      return;
     }
-  },
+
+    if (!xdr || typeof xdr !== "string") {
+      res
+        .status(400)
+        .json(errorResponse("MISSING_XDR", "signed XDR is required"));
+      return;
+    }
+
+    if (proposal.status === "Executed" || proposal.status === "Rejected") {
+      res
+        .status(409)
+        .json(
+          errorResponse(
+            "PROPOSAL_CLOSED",
+            "This proposal is no longer open for voting"
+          )
+        );
+      return;
+    }
+
+    if (proposal.signers.includes(signer)) {
+      res
+        .status(409)
+        .json(
+          errorResponse(
+            "ALREADY_VOTED",
+            "This address has already voted on this proposal"
+          )
+        );
+      return;
+    }
+
+    // Record the vote
+    proposal.signers.push(signer);
+    proposal.votesFor += 1;
+
+    // Check threshold
+    if (proposal.votesFor >= proposal.requiredSignatures) {
+      proposal.thresholdMet = true;
+      const nowTs = new Date().toISOString();
+      const expiry = new Date(
+        Date.now() + TIMELOCK_DURATION_MS
+      ).toISOString();
+      proposal.timelockStartedAt = nowTs;
+      proposal.timelockExpiresAt = expiry;
+      proposal.executableAt = expiry;
+    }
+
+    proposal.status = recomputeStatus(proposal);
+    proposals.set(proposal.id, proposal);
+
+    // Broadcast SSE update
+    broadcastProposalUpdate(proposal);
+
+    logger.info("[governance/vote]", {
+      proposalId: proposal.id,
+      signer,
+      votesFor: proposal.votesFor,
+      status: proposal.status,
+    });
+
+    res.json(
+      successResponse({
+        proposalId: proposal.id,
+        status: proposal.status,
+        votesFor: proposal.votesFor,
+        thresholdMet: proposal.thresholdMet,
+        timelockExpiresAt: proposal.timelockExpiresAt,
+      })
+    );
+  }
 );
 
-// ── GET /api/v1/governance/proposals/:id/status ──────────────────────────────
-
 /**
- * Query the Soroban contract directly for real-time proposal status.
+ * POST /api/v1/governance/proposals/:id/execute
+ * Body: { xdr: string }
  *
- * This endpoint does NOT use the database cache — it always reads from
- * the contract so the frontend governance dashboard shows accurate data.
- *
- * Response 200: { success: true, data: OnChainProposalStatus }
- * Response 404: proposal not found in DB
+ * Only allowed when status === "Executable" (timelock expired + threshold met).
  */
-governanceRouter.get(
-  "/proposals/:id/status",
-  async (req: Request, res: Response): Promise<void> => {
-    const { id } = req.params;
-
-    if (!isUuid(id)) {
+governanceRouter.post(
+  "/proposals/:id/execute",
+  authenticate,
+  (req: Request, res: Response): void => {
+    const proposal = proposals.get(req.params.id);
+    if (!proposal) {
       res
-        .status(400)
-        .json(errorResponse("INVALID_ID", "Proposal ID must be a valid UUID"));
+        .status(404)
+        .json(
+          errorResponse("NOT_FOUND", `Proposal ${req.params.id} not found`)
+        );
       return;
     }
 
-    try {
-      const status = await getOnChainProposalStatus(id);
-      res.status(200).json(successResponse(status));
-    } catch (err) {
-      const code = (err as NodeJS.ErrnoException).code;
-      if (code === "NOT_FOUND") {
-        res.status(404).json(errorResponse("NOT_FOUND", "Governance proposal not found"));
-        return;
-      }
+    const currentStatus = recomputeStatus(proposal);
 
-      logger.error({ err, id }, "[governance] on-chain status query failed");
+    if (currentStatus !== "Executable") {
+      const message =
+        currentStatus === "TimelockActive"
+          ? `Timelock has not expired yet. Executable at ${proposal.executableAt ?? "unknown"}.`
+          : currentStatus === "Pending"
+          ? "Proposal has not reached the required signature threshold yet."
+          : `Proposal cannot be executed (status: ${currentStatus}).`;
       res
-        .status(500)
-        .json(errorResponse("INTERNAL_ERROR", "Failed to query on-chain proposal status"));
+        .status(409)
+        .json(errorResponse("NOT_EXECUTABLE", message));
+      return;
     }
-  },
+
+    const { xdr } = req.body as { xdr?: string };
+    if (!xdr || typeof xdr !== "string") {
+      res
+        .status(400)
+        .json(errorResponse("MISSING_XDR", "signed XDR is required to execute"));
+      return;
+    }
+
+    // Mark as executed
+    proposal.status = "Executed";
+    proposals.set(proposal.id, proposal);
+
+    broadcastProposalUpdate(proposal);
+
+    logger.info("[governance/execute]", {
+      proposalId: proposal.id,
+      executedAt: new Date().toISOString(),
+    });
+
+    res.json(
+      successResponse({
+        proposalId: proposal.id,
+        status: "Executed",
+        executedAt: new Date().toISOString(),
+      })
+    );
+  }
 );
