@@ -83,6 +83,7 @@ vaultRouter.get("/stats", async (req: Request, res: Response): Promise<void> => 
       "Cache-Control",
       `public, max-age=${VAULT_STATS_CACHE_TTL_SECS}, s-maxage=${VAULT_STATS_CACHE_TTL_SECS}`,
     );
+    res.set("X-Cache", cached ? "HIT" : "MISS");
 
     res.json(
       successResponse({

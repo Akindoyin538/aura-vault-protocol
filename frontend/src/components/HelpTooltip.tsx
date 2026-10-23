@@ -104,7 +104,11 @@ export default function HelpTooltip({
   };
 
   return (
-    <span className={`relative inline-flex items-center ${className}`}>
+    <span
+      className={`relative inline-flex items-center ${className}`}
+      onMouseEnter={() => setOpen(true)}
+      onMouseLeave={() => setOpen(false)}
+    >
       {/* ── Trigger button ──────────────────────────────────────── */}
       <button
         ref={triggerRef}
@@ -155,6 +159,9 @@ export default function HelpTooltip({
           <p className="text-xs leading-relaxed text-gray-300">
             {entry.description}
           </p>
+          <a href={entry.href} className="mt-2 inline-block text-xs text-indigo-300 underline underline-offset-2 hover:text-indigo-200">
+            Learn more
+          </a>
         </div>
       )}
     </span>

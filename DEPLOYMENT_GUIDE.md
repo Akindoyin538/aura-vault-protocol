@@ -42,7 +42,7 @@ This guide covers the full deployment lifecycle: building the Soroban smart cont
 |---|---|---|
 | Rust | 1.79 | `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \| sh` |
 | `wasm32-unknown-unknown` target | — | `rustup target add wasm32-unknown-unknown` |
-| Stellar CLI (`stellar`) | Latest stable | `cargo install stellar-cli --features opt` |
+| Stellar CLI (`stellar`) | **v21.3.0 or newer** | `cargo install --locked stellar-cli --features opt` |
 | Node.js | 20 LTS | https://nodejs.org |
 | Docker + Docker Compose | 24+ | https://docs.docker.com/get-docker |
 | `jq` | 1.6+ | `apt-get install jq` / `brew install jq` |
@@ -96,9 +96,14 @@ curl "https://friendbot.stellar.org?addr=$(stellar keys address deployer)"
 
 ### Configuring the Stellar CLI
 
-Add the networks to your CLI config once:
+Add the networks to your CLI config once. In Stellar CLI v21+, `--rpc-url` and
+`--network-passphrase` belong to `stellar network add`; contract commands use
+the saved network name with `--network` and the signing identity with
+`--source` (the old `soroban` executable and `--secret-key` flag are obsolete).
 
 ```bash
+stellar --version  # require 21.3.0 or newer
+
 # Testnet (usually pre-configured)
 stellar network add testnet \
   --rpc-url https://soroban-testnet.stellar.org \

@@ -1,23 +1,29 @@
 "use client";
 
+import { useAnimatedNumber } from "@/lib/useAnimatedNumber";
+
 interface AnimatedShareBalanceProps {
   value: string;
   className?: string;
-  /** When true, formats value as a price (e.g. 1.0000) */
   priceMode?: boolean;
+  decimals?: number;
 }
+
 export function AnimatedShareBalance({
   value,
   className = "",
   priceMode = false,
+  decimals = 2,
 }: AnimatedShareBalanceProps) {
-  const display = priceMode
-    ? parseFloat(value).toFixed(4)
-    : value;
+  const numeric = Number.parseFloat(value.replaceAll(",", ""));
+  const display = useAnimatedNumber(Number.isFinite(numeric) ? numeric : 0, {
+    decimals: priceMode ? 4 : decimals,
+    duration: 260,
+  });
+
   return (
-    <span className={`tabular-nums transition-all duration-300 ${className}`}>
-      {display}
+    <span aria-live="polite" className={`tabular-nums ${className}`}>
+      <span key={display} className="animate-value-change inline-block">{display}</span>
     </span>
   );
-interface AnimatedShareBalanceProps { value: string; className?: string; priceMode?: boolean; }
-export function AnimatedShareBalance({ value, className="" }: AnimatedShareBalanceProps) { return <span className={className}>{value}</span>; }
+}
