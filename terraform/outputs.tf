@@ -39,6 +39,16 @@ output "rds_endpoint" {
   sensitive   = true
 }
 
+output "rds_instance_arn" {
+  description = "ARN of the production RDS instance, used by the cross-region disaster-recovery replica."
+  value       = aws_db_instance.main.arn
+}
+
+output "rds_monitoring_role_arn" {
+  description = "IAM role ARN used for RDS Enhanced Monitoring in the primary and DR regions."
+  value       = aws_iam_role.rds_monitoring.arn
+}
+
 output "s3_bucket_name" {
   description = "Name of the S3 bucket for static assets"
   value       = aws_s3_bucket.static_assets.id
