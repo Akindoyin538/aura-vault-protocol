@@ -166,6 +166,7 @@ export function DepositModal({
   totalAssets = "0",
   onSuccess,
 }: DepositModalProps) {
+  const { address } = useWalletStore();
   const [step, setStep] = useState<DepositStep>(1);
   const [amount, setAmount] = useState("");
   const [amountError, setAmountError] = useState("");
@@ -260,6 +261,8 @@ export function DepositModal({
       const newBalance = data.newShareBalance ?? estimatedShares;
       setNewShareBalance(newBalance);
       setTxStatus("success");
+      // Invalidate portfolio SWR cache so the panel refreshes automatically (#886)
+      if (address) invalidatePortfolioCache(address);
       onSuccess?.(newBalance);
     } catch (err: unknown) {
       setTxError(err instanceof Error ? err.message : "Deposit failed");
