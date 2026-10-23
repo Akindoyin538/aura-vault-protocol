@@ -4,6 +4,17 @@
 
 set -euo pipefail
 
+if ! command -v stellar >/dev/null 2>&1; then
+  echo "Stellar CLI v21.3.0+ is required (https://github.com/stellar/stellar-cli)" >&2
+  exit 1
+fi
+STELLAR_VERSION=$(stellar --version | sed -E 's/.* ([0-9]+\.[0-9]+\.[0-9]+).*/\1/')
+IFS=. read -r STELLAR_MAJOR STELLAR_MINOR _ <<< "$STELLAR_VERSION"
+if [[ ! "$STELLAR_MAJOR" =~ ^[0-9]+$ || ! "$STELLAR_MINOR" =~ ^[0-9]+$ ]] || (( STELLAR_MAJOR < 21 || (STELLAR_MAJOR == 21 && STELLAR_MINOR < 3) )); then
+  echo "Stellar CLI v21.3.0+ required; found $STELLAR_VERSION" >&2
+  exit 1
+fi
+
 # Colors
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; NC='\033[0m'
 pass() { echo -e "${GREEN}  ✓${NC} $1"; }

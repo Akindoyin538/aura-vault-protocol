@@ -232,7 +232,7 @@ resource "aws_cloudwatch_log_group" "application" {
   tags = {
     Name        = "${var.project_name}-application-logs-${var.environment}"
     LogTier     = "application"
-    Environment = var.environment
+    Environment = local.cost_environment
     ManagedBy   = "terraform"
   }
 }
@@ -245,7 +245,7 @@ resource "aws_cloudwatch_log_group" "error" {
   tags = {
     Name        = "${var.project_name}-error-logs-${var.environment}"
     LogTier     = "error"
-    Environment = var.environment
+    Environment = local.cost_environment
     ManagedBy   = "terraform"
   }
 }
@@ -258,7 +258,7 @@ resource "aws_cloudwatch_log_group" "security" {
   tags = {
     Name        = "${var.project_name}-security-logs-${var.environment}"
     LogTier     = "security"
-    Environment = var.environment
+    Environment = local.cost_environment
     ManagedBy   = "terraform"
   }
 }
@@ -271,7 +271,7 @@ resource "aws_cloudwatch_log_group" "debug" {
   tags = {
     Name        = "${var.project_name}-debug-logs-${var.environment}"
     LogTier     = "debug"
-    Environment = var.environment
+    Environment = local.cost_environment
     ManagedBy   = "terraform"
   }
 }
@@ -300,7 +300,7 @@ resource "aws_cloudwatch_metric_alarm" "log_ingestion_budget" {
 
   tags = {
     Name        = "${var.project_name}-log-ingestion-budget-${var.environment}"
-    Environment = var.environment
+    Environment = local.cost_environment
     ManagedBy   = "terraform"
   }
 }

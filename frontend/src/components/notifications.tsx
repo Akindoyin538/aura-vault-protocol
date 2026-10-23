@@ -1,8 +1,5 @@
 "use client";
 
-import { createContext, useContext, useState, useCallback, useEffect, type ReactNode } from "react";
-import { useTranslation } from "react-i18next";
-import "@/lib/i18n";
 import {
   createContext,
   useContext,
@@ -11,6 +8,8 @@ import {
   useEffect,
   type ReactNode,
 } from "react";
+import { useTranslation } from "react-i18next";
+import "@/lib/i18n";
 import { useTranslations, useFormatter } from "next-intl";
 
 export type NotificationType = "success" | "error" | "info" | "warning";

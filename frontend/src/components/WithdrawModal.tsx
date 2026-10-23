@@ -24,6 +24,7 @@ import {
   ShareInput,
   FormField,
 } from "./AccessibleFormComponents";
+import { UsdAmountConverter } from "./UsdAmountConverter";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -480,6 +481,8 @@ export function WithdrawModal({
               </p>
             </div>
           )}
+
+          <UsdAmountConverter tokenAmount={estimatedTokens} shareAmount={shares} />
 
           <button
             type="button"
