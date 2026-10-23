@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { ThemeToggle } from "@/components/ThemeToggle";
-import SharePriceAlertPanel from "@/components/SharePriceAlertPanel";
+import { useWidgetLayout } from "@/lib/useWidgetLayout";
 import "@/lib/i18n";
 
 interface Settings {
@@ -46,6 +46,7 @@ export default function SettingsContent() {
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
   const [saved, setSaved] = useState(false);
   const [showDeactivate, setShowDeactivate] = useState(false);
+  const { widgets, setVisible } = useWidgetLayout();
 
   useEffect(() => {
     setSettings(loadSettings());
@@ -80,6 +81,24 @@ export default function SettingsContent() {
               {t("settings.appearance.description")}
             </p>
             <ThemeToggle />
+          </div>
+        </section>
+
+        <section className="mb-8" aria-labelledby="dashboard-display-title">
+          <h2 id="dashboard-display-title" className="text-lg font-medium mb-3">Dashboard display</h2>
+          <div className="space-y-3 rounded-xl border border-zinc-200 dark:border-zinc-800 p-4 bg-white dark:bg-zinc-900">
+            {widgets.map((widget) => (
+              <label key={widget.id} className="flex items-center justify-between gap-4 cursor-pointer">
+                <span className="text-sm">{widget.label}</span>
+                <input
+                  type="checkbox"
+                  checked={widget.visible}
+                  onChange={(event) => setVisible(widget.id, event.target.checked)}
+                  aria-label={`Show ${widget.label} card`}
+                  className="h-4 w-4 rounded border-zinc-300 text-indigo-600 focus:ring-indigo-500"
+                />
+              </label>
+            ))}
           </div>
         </section>
 

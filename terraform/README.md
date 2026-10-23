@@ -2,6 +2,22 @@
 
 Terraform configuration for the full Aura Vault Protocol AWS stack. All resources are tagged, least-privilege, and designed for multi-AZ high availability.
 
+## Production cross-region DR
+
+`envs/production` provisions the encrypted production read replica in
+`eu-west-1` from the primary instance ARN in the root Terraform state. It also
+creates a CloudWatch `ReplicaLag` alarm and an SNS topic in the DR region. Set
+`TF_VAR_pagerduty_integration_key` through a secret store when applying the
+production environment to subscribe PagerDuty to that alarm. The value is
+sensitive and must not be committed to a tfvars file.
+
+Route 53 API failover remains primary-only until both `dr_alb_dns_name` and
+`dr_alb_zone_id` are set in the root Terraform environment. Those values must
+identify a healthy, already-deployed recovery application ALB in `eu-west-1`;
+the RDS replica stack does not provision that application tier. See the
+[cross-region failover runbook](../docs/disaster-recovery/runbook.md#cross-region-production-failover-eu-west-1)
+before promoting a replica or changing traffic.
+
 ---
 
 ## Table of Contents

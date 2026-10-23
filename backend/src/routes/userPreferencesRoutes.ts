@@ -1,32 +1,61 @@
 import { Router, type Request, type Response } from "express";
-import {
-  getPreferences,
-  updatePreferences,
-  preferencesStore,
-  type UserPreferences,
-} from "../preferences.js";
+import { z } from "zod";
+import { getWritePool } from "../db.js";
+import { logger } from "../logger.js";
 
 export const userPreferencesRouter = Router();
 
-userPreferencesRouter.get("/", getPreferences);
-userPreferencesRouter.put("/", updatePreferences);
-userPreferencesRouter.patch("/", updatePreferences);
+const widgetSchema = z.object({
+  id: z.enum(["hero", "apy", "depositors", "last-harvest", "user-position", "referral"]),
+  label: z.string().max(80),
+  visible: z.boolean(),
+}).strict();
 
-userPreferencesRouter.delete("/alerts/:id", (req: Request, res: Response): void => {
-  const userId = ((req as any).user?.sub as string) || "anonymous";
-  const { id } = req.params;
+const dashboardSchema = z.object({
+  dashboardWidgets: z.array(widgetSchema).max(12),
+}).strict();
 
-  const current: UserPreferences = preferencesStore.get(userId) ?? {
-    default_history_range: "30d",
-    priceAlerts: [],
-  };
+function userId(req: Request): string | null {
+  const id = (req as Request & { user?: { sub?: unknown } }).user?.sub;
+  return typeof id === "string" && id.length > 0 ? id : null;
+}
 
-  const updatedAlerts = (current.priceAlerts ?? []).filter((a) => a.id !== id);
-  const updated: UserPreferences = {
-    ...current,
-    priceAlerts: updatedAlerts,
-  };
+userPreferencesRouter.get("/", async (req: Request, res: Response): Promise<void> => {
+  const id = userId(req);
+  if (!id) { res.status(401).json({ error: "Missing authenticated user" }); return; }
+  try {
+    const result = await getWritePool().query<{ preferences: Record<string, unknown> }>(
+      "SELECT preferences FROM user_preferences WHERE user_id = $1",
+      [id],
+    );
+    res.json({ preferences: result.rows[0]?.preferences ?? {} });
+  } catch (error) {
+    logger.error({ error }, "[userPreferences] read failed");
+    res.status(500).json({ error: "Unable to load user preferences" });
+  }
+});
 
-  preferencesStore.set(userId, updated);
-  res.json(updated);
+userPreferencesRouter.put("/", async (req: Request, res: Response): Promise<void> => {
+  const id = userId(req);
+  if (!id) { res.status(401).json({ error: "Missing authenticated user" }); return; }
+  const parsed = dashboardSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "Invalid dashboard widget preferences", details: parsed.error.issues });
+    return;
+  }
+  try {
+    const result = await getWritePool().query<{ preferences: Record<string, unknown> }>(
+      `INSERT INTO user_preferences (user_id, preferences)
+       VALUES ($1, jsonb_build_object('dashboardWidgets', $2::jsonb))
+       ON CONFLICT (user_id) DO UPDATE
+       SET preferences = user_preferences.preferences || EXCLUDED.preferences,
+           updated_at = NOW()
+       RETURNING preferences`,
+      [id, JSON.stringify(parsed.data.dashboardWidgets)],
+    );
+    res.json({ preferences: result.rows[0]?.preferences ?? {} });
+  } catch (error) {
+    logger.error({ error }, "[userPreferences] write failed");
+    res.status(500).json({ error: "Unable to save user preferences" });
+  }
 });

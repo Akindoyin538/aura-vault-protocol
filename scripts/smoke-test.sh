@@ -13,7 +13,7 @@
 #   TEST_WALLET       Stellar wallet address for auth smoke test
 #   MAX_STATS_AGE_MS  Maximum stats freshness window in ms (default 120000)
 #
-# The script enforces a 30-second hard wall-clock limit via the `timeout`
+# The script enforces a 55-second hard wall-clock limit via the `timeout`
 # command. Any non-zero exit from the TypeScript runner is propagated verbatim
 # so the CI/CD pipeline can detect and roll back a failed deployment.
 #
@@ -27,7 +27,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BASE_URL="${BASE_URL:-http://localhost:3001}"
 SMOKE_TIMEOUT_MS="${SMOKE_TIMEOUT_MS:-5000}"
 MAX_STATS_AGE_MS="${MAX_STATS_AGE_MS:-120000}"
-HARD_TIMEOUT_SECS=30
+HARD_TIMEOUT_SECS=55
 
 # ── Locate Node / npx ────────────────────────────────────────────────────────
 if ! command -v node &>/dev/null; then

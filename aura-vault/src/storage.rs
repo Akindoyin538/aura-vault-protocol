@@ -98,10 +98,20 @@ pub enum DataKey {
     MultiSigVote(u64, Address),
     /// Per-address role bitmask used by admin/keeper/guardian checks.
     Role(Address),
+    /// SEP-41 share allowance and its expiration ledger.
+    ShareAllowance(Address, Address),
+    /// Optional contract address implementing the configured DEX router API.
+    DexRouter,
     /// Pending admin nominated for a two-step transfer.
     PendingAdmin,
     /// Unix timestamp at which a pending admin transfer expires.
     PendingAdminExpiry,
+    /// Yield amount currently subject to linear vesting, in underlying units.
+    YieldVestingPending,
+    /// Ledger at which the current vesting interval began.
+    YieldVestingStart,
+    /// Vesting interval length, in ledgers.
+    YieldVestingPeriod,
 }
 
 pub const ADMIN_ROLE: u32 = 1 << 0;
@@ -109,6 +119,7 @@ pub const KEEPER_ROLE: u32 = 1 << 1;
 pub const GUARDIAN_ROLE: u32 = 1 << 2;
 
 pub const DAY_IN_LEDGERS: u32 = 17_280;
+pub const DEFAULT_YIELD_VESTING_PERIOD: u32 = DAY_IN_LEDGERS * 7;
 pub const INSTANCE_LIFETIME_THRESHOLD: u32 = DAY_IN_LEDGERS * 7;
 pub const INSTANCE_BUMP_AMOUNT: u32 = DAY_IN_LEDGERS * 30;
 pub const PERSISTENT_LIFETIME_THRESHOLD: u32 = DAY_IN_LEDGERS * 7;
@@ -146,6 +157,18 @@ pub fn set_token(env: &Env, token: &Address) {
         .set(&DataKey::UnderlyingToken, token);
 }
 
+pub fn get_dex_router(env: &Env) -> Option<Address> {
+    env.storage().instance().get(&DataKey::DexRouter)
+}
+
+pub fn set_dex_router(env: &Env, router: Option<&Address>) {
+    if let Some(address) = router {
+        env.storage().instance().set(&DataKey::DexRouter, address);
+    } else {
+        env.storage().instance().remove(&DataKey::DexRouter);
+    }
+}
+
 pub fn get_total_shares(env: &Env) -> i128 {
     env.storage()
         .instance()
@@ -168,6 +191,54 @@ pub fn set_total_deposited(env: &Env, val: i128) {
     env.storage().instance().set(&DataKey::TotalDeposited, &val);
 }
 
+pub fn get_yield_vesting_pending(env: &Env) -> i128 {
+    env.storage().instance().get(&DataKey::YieldVestingPending).unwrap_or(0)
+}
+
+pub fn set_yield_vesting_pending(env: &Env, amount: i128) {
+    env.storage().instance().set(&DataKey::YieldVestingPending, &amount);
+}
+
+pub fn get_yield_vesting_start(env: &Env) -> u32 {
+    env.storage().instance().get(&DataKey::YieldVestingStart).unwrap_or(0)
+}
+
+pub fn set_yield_vesting_start(env: &Env, ledger: u32) {
+    env.storage().instance().set(&DataKey::YieldVestingStart, &ledger);
+}
+
+pub fn get_yield_vesting_period(env: &Env) -> u32 {
+    env.storage().instance().get(&DataKey::YieldVestingPeriod).unwrap_or(DEFAULT_YIELD_VESTING_PERIOD)
+}
+
+pub fn set_yield_vesting_period(env: &Env, ledgers: u32) {
+    env.storage().instance().set(&DataKey::YieldVestingPeriod, &ledgers);
+}
+
+/// Returns the portion of harvested yield that has not vested at this ledger.
+pub fn unvested_yield(env: &Env) -> i128 {
+    let pending = get_yield_vesting_pending(env);
+    let period = get_yield_vesting_period(env);
+    if pending <= 0 || period == 0 { return 0; }
+    let start = get_yield_vesting_start(env);
+    let elapsed = env.ledger().sequence().saturating_sub(start);
+    if elapsed >= period { return 0; }
+    let remaining = (period - elapsed) as i128;
+    let period = period as i128;
+    (pending / period) * remaining + ((pending % period) * remaining) / period
+}
+
+/// Add a new yield credit while preserving the currently unvested balance.
+/// The combined remainder restarts its linear schedule from the current ledger.
+pub fn schedule_yield_vesting(env: &Env, added: i128) -> Result<(), VaultError> {
+    let pending = unvested_yield(env)
+        .checked_add(added)
+        .ok_or(VaultError::MathOverflow)?;
+    set_yield_vesting_pending(env, pending);
+    set_yield_vesting_start(env, env.ledger().sequence());
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Persistent-storage helpers
 // ---------------------------------------------------------------------------
@@ -183,6 +254,38 @@ pub fn set_balance(env: &Env, addr: &Address, val: i128) {
     env.storage()
         .persistent()
         .set(&DataKey::Balance(addr.clone()), &val);
+}
+
+pub fn get_share_allowance(env: &Env, owner: &Address, spender: &Address) -> i128 {
+    get_share_allowance_details(env, owner, spender).map(|(amount, _)| amount).unwrap_or(0)
+}
+
+pub fn get_share_allowance_details(
+    env: &Env,
+    owner: &Address,
+    spender: &Address,
+) -> Option<(i128, u32)> {
+    let key = DataKey::ShareAllowance(owner.clone(), spender.clone());
+    match env.storage().persistent().get::<_, (i128, u32)>(&key) {
+        value @ Some((_, expiration)) if env.ledger().sequence() <= expiration => value,
+        _ => None,
+    }
+}
+
+pub fn set_share_allowance(
+    env: &Env,
+    owner: &Address,
+    spender: &Address,
+    amount: i128,
+    expiration: u32,
+) {
+    let key = DataKey::ShareAllowance(owner.clone(), spender.clone());
+    env.storage().persistent().set(&key, &(amount, expiration));
+    env.storage().persistent().extend_ttl(
+        &key,
+        PERSISTENT_LIFETIME_THRESHOLD,
+        PERSISTENT_BUMP_AMOUNT,
+    );
 }
 
 // ---------------------------------------------------------------------------

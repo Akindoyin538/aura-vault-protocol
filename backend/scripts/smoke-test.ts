@@ -17,7 +17,7 @@
  *   MAX_STATS_AGE_MS  Maximum acceptable age for cached vault stats in ms
  *                     (used to verify the Horizon listener is connected)
  *
- * Total wall-clock limit: 30 seconds (enforced by the caller via timeout(1)).
+ * Total wall-clock limit: 55 seconds (enforced by the caller via timeout(1)).
  *
  * Closes #947
  */
@@ -32,6 +32,7 @@ const BASE_URL = (process.env.BASE_URL ?? 'http://localhost:3001').replace(/\/$/
 const TIMEOUT_MS = parseInt(process.env.SMOKE_TIMEOUT_MS ?? '5000', 10);
 const TEST_WALLET = process.env.TEST_WALLET ?? 'GAHJJJKMOKYE4RVPZEWZTKH5FVI4PA3VL7GK2LFNUBSGBV3NVARIUOY';
 const MAX_STATS_AGE_MS = parseInt(process.env.MAX_STATS_AGE_MS ?? '120000', 10); // 2-minute freshness window
+let smokeAccessToken = '';
 
 // ─── Lightweight HTTP client ──────────────────────────────────────────────────
 
@@ -151,6 +152,11 @@ async function testVaultStats(): Promise<void> {
     typeof body.data === 'object' && body.data !== null,
     `Expected data object in response`,
   );
+  const stats = body.data as Record<string, unknown>;
+  const totalAssets = Number(stats.total_assets ?? stats.totalAssets);
+  const apy = Number(stats.apy7d ?? stats.apy);
+  assert(Number.isFinite(totalAssets) && totalAssets > 0, `Expected non-zero total assets, got ${stats.total_assets ?? stats.totalAssets}`);
+  assert(Number.isFinite(apy) && apy > 0 && apy < 1000, `Expected APY between 0 and 1000%, got ${stats.apy7d ?? stats.apy}`);
 }
 
 /**
@@ -183,6 +189,28 @@ async function testAuthLogin(): Promise<void> {
     typeof body.refreshToken === 'string' && body.refreshToken.length > 0,
     `Expected refreshToken string in auth response`,
   );
+  smokeAccessToken = body.accessToken;
+}
+
+async function testLeaderboard(): Promise<void> {
+  const res = await request(`${BASE_URL}/api/vault/leaderboard`);
+  assert(res.status === 200, `Leaderboard returned HTTP ${res.status}`);
+  const body = res.json<{ leaderboard?: unknown[] }>();
+  assert(Array.isArray(body.leaderboard) && body.leaderboard.length > 0, 'Leaderboard must contain at least one depositor');
+}
+
+async function testAuthenticatedRateLimit(): Promise<void> {
+  if (!smokeAccessToken) throw new Error('Auth smoke test did not provide an access token');
+  const responses: number[] = [];
+  for (let i = 0; i < 61; i += 1) {
+    const res = await request(`${BASE_URL}/api/auth/sessions`, {
+      headers: { Authorization: `Bearer ${smokeAccessToken}` },
+    });
+    responses.push(res.status);
+    if (res.status >= 500) throw new Error(`Authenticated request ${i + 1} failed with HTTP ${res.status}`);
+  }
+  assert(responses[60] === 429, `Expected request 61 to be rate limited (429), got ${responses[60]}`);
+  assert(responses.slice(0, 60).every((status) => status < 400), 'One of the first 60 authenticated reads was unexpectedly rejected');
 }
 
 /**
@@ -196,6 +224,7 @@ async function testRedisCacheWarm(): Promise<void> {
   // Second call should be a cache hit
   const res = await request(`${BASE_URL}/api/v1/vault/stats`);
   assert(res.status === 200, `Expected HTTP 200 on cached request, got ${res.status}`);
+  assert(String(res.headers['x-cache'] ?? '').toUpperCase() === 'HIT', `Expected X-Cache: HIT, got ${res.headers['x-cache'] ?? '(missing)'}`);
 
   const body = res.json<{ success?: boolean; data?: { cached?: boolean } }>();
   assert(body?.success === true, 'Cached vault stats response was not successful');
@@ -203,6 +232,40 @@ async function testRedisCacheWarm(): Promise<void> {
     body.data?.cached === true,
     `Expected cached: true on second vault/stats call; got cached: ${body.data?.cached}`,
   );
+}
+
+async function testSseHeartbeat(): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const url = new URL(`${BASE_URL}/api/v1/events/stream`);
+    const lib = url.protocol === 'https:' ? https : http;
+    const req = lib.request(url, { headers: { Accept: 'text/event-stream' } });
+    let data = '';
+    let settled = false;
+    const timeout = setTimeout(() => finish(new Error('SSE status/heartbeat was not received within 30 seconds')), 30_000);
+    const finish = (error?: Error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      req.destroy();
+      if (error) reject(error);
+      else resolve();
+    };
+    req.on('response', (res) => {
+      if (res.statusCode !== 200 || !String(res.headers['content-type']).includes('text/event-stream')) {
+        finish(new Error(`Expected SSE HTTP 200, got ${res.statusCode} (${res.headers['content-type']})`));
+        return;
+      }
+      res.on('data', (chunk: Buffer) => {
+        data += chunk.toString();
+        if (data.includes('event: status') && data.includes(': keepalive')) finish();
+      });
+      res.on('error', (error) => finish(error));
+    });
+    req.on('error', (error) => {
+      if (!settled) finish(error);
+    });
+    req.end();
+  });
 }
 
 /**
@@ -284,6 +347,9 @@ async function main(): Promise<void> {
     { name: 'TC-04  Redis cache is warm (stats cached)',         testRedisCacheWarm },
     { name: 'TC-05  Database is reachable (via health)',         testDatabaseReachable },
     { name: 'TC-06  Horizon listener connected (stats fresh)',   testHorizonListenerFreshness },
+    { name: 'TC-07  Leaderboard contains a depositor',            testLeaderboard },
+    { name: 'TC-08  Authenticated rate limit rejects request 61', testAuthenticatedRateLimit },
+    { name: 'TC-09  SSE stream sends status and heartbeat',        testSseHeartbeat },
   ];
 
   const results: TestResult[] = [];

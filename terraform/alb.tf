@@ -17,6 +17,7 @@ resource "aws_lb" "main" {
   
   tags = {
     Name = "${var.project_name}-alb-${var.environment}"
+    Component = "networking"
   }
 }
 
@@ -41,6 +42,7 @@ resource "aws_lb_target_group" "backend" {
   
   tags = {
     Name = "${var.project_name}-backend-tg-${var.environment}"
+    Component = "backend"
   }
 }
 
@@ -70,8 +72,19 @@ resource "aws_lb_listener" "https" {
   certificate_arn   = var.domain_name != "" ? aws_acm_certificate.main[0].arn : ""
   
   default_action {
-    type             = "forward"
-    target_group_arn = aws_lb_target_group.backend.arn
+    type = "forward"
+
+    forward {
+      target_group {
+        arn    = aws_lb_target_group.backend.arn
+        weight = 100 - var.canary_weight
+      }
+
+      target_group {
+        arn    = aws_lb_target_group.backend_canary.arn
+        weight = var.canary_weight
+      }
+    }
   }
 }
 
